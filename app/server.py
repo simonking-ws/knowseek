@@ -820,27 +820,13 @@ def api_download():
     return send_file(file_path, as_attachment=False)
 
 
-# ==================== 后台自动同步 ====================
-
-def background_sync():
-    interval = config.get("sync_interval", 300)
-    while True:
-        time.sleep(interval)
-        try:
-            dirs = config.get("scan_dirs", [])
-            exts = config.get("extensions", list(SUPPORTED_EXTS))
-            sync.scan_and_index(dirs, exts)
-        except Exception:
-            pass
-
+# ==================== 后台自动同步（已禁用，统一从上传处理） ====================
 
 def start_app():
     indexer.init_db()
     custom_dict = config.get("custom_dict")
     if custom_dict:
         indexer.load_custom_dict(custom_dict)
-    t = threading.Thread(target=background_sync, daemon=True)
-    t.start()
     port = config.get("port", 9876)
     app.run(host="127.0.0.1", port=port, debug=False)
 
