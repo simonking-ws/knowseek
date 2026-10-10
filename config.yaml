@@ -1,4 +1,4 @@
-# 关键字搜索知识库 - 本地轻量版配置
+# 知寻 KnowSeek - 本地知识库全文检索配置
 # ==============================
 
 # 文档扫描目录（支持多个目录，用逗号分隔或列表形式）
@@ -24,3 +24,27 @@ port: 9876
 
 # 自定义词典文件路径（可选，一行一个词）
 # custom_dict: "data/custom_dict.txt"
+
+# 知识图谱（L0 结构图谱 + L1 实体抽取），数据同存在 data/knowseek.db
+kg:
+  # 自定义领域词典，格式：词 [词频] [词性]，词性可用 nr(人名) / nt(机构) / nz(专名)
+  term_dict: "data/kg_terms.txt"
+  # 噪声词表：一行一个词，不会抽成实体（抽取质量不满意时优先加这里）
+  stopwords: "data/kg_stopwords.txt"
+  # 实体别名表（JSON）：{"规范名": ["别名", ...]}，用于合并重复实体
+  # 抽取时自动把别名替换成规范名；点「🔀 应用别名」可就地合并已有实体
+  alias_file: "data/kg_alias.json"
+  # 全量重建时清理低频实体：出现文档数 < min_doc 且 提及数 < min_mention
+  min_doc: 2
+  min_mention: 3
+  # 每个节点保留的共现边上限（防止边爆炸）
+  topk_edges: 10
+
+  # L2 关系抽取（可选）：给共现实体对打精确谓词
+  # 默认关闭——开启后会调用外部大模型，不再"纯离线、不依赖大模型"
+  llm:
+    enabled: false
+    base_url: "https://api.openai.com/v1"   # 也支持任何 OpenAI 兼容接口（如本地 Ollama / vLLM）
+    api_key: ""
+    model: "gpt-4o-mini"
+    timeout: 30

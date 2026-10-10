@@ -9,11 +9,14 @@ from . import indexer
 from .parser import parse_file, compute_file_hash
 
 SUPPORTED_EXT = {".docx", ".txt", ".md", ".pdf", ".xlsx", ".xls"}
+UPLOAD_PREFIX = "upload://"   # 上传件虚拟路径，与 server.py 保持一致
 
 
-def scan_and_index(directories, extensions=None):
+def scan_and_index(directories, extensions=None, prune=True):
     """
     扫描目录，解析并索引所有支持的文档
+    prune=True  : 全量同步，本次未扫描到的文档视为已删除并移除索引
+    prune=False : 增量索引（仅索引指定目录），不清理其它来源的文档
     返回 (added, updated, skipped, removed, errors)
     """
     exts = set(extensions or list(SUPPORTED_EXT))
@@ -60,14 +63,22 @@ def scan_and_index(directories, extensions=None):
                 except Exception as e:
                     errors.append(f"{fpath}: {e}")
 
+    # prune=False 时为增量索引：保留其它目录/上传文件的索引，不做删除清理
+    if not prune:
+        return added, updated, skipped, 0, errors
+
     # 检查已删除的文件
     conn = indexer.get_db()
     all_docs = conn.execute("SELECT file_path FROM documents").fetchall()
     conn.close()
     removed = 0
     for doc in all_docs:
-        if doc["file_path"] not in indexed_paths:
-            indexer.remove_doc(doc["file_path"])
+        fp = doc["file_path"] or ""
+        # 上传件只有索引、磁盘上没有原文件，永远扫不到，不能被判为"已删除"
+        if fp.startswith(UPLOAD_PREFIX):
+            continue
+        if fp not in indexed_paths:
+            indexer.remove_doc(fp)
             removed += 1
 
     return added, updated, skipped, removed, errors

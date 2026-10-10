@@ -8,6 +8,52 @@ import hashlib
 from docx import Document
 
 
+def _parse_doc_via_com(file_path):
+    """通过 Word COM 接口解析 .doc 文件（仅 Windows）"""
+    import win32com.client
+    import pythoncom
+
+    pythoncom.CoInitialize()
+    word = None
+    doc = None
+    try:
+        word = win32com.client.Dispatch("Word.Application")
+        word.Visible = False
+        doc = word.Documents.Open(os.path.abspath(file_path), ReadOnly=True)
+
+        file_hash = compute_file_hash(file_path)
+        chunks = []
+        title = os.path.basename(file_path)
+
+        for para_idx in range(1, doc.Paragraphs.Count + 1):
+            para = doc.Paragraphs(para_idx)
+            text = para.Range.Text.strip()
+            if not text or len(text) < 2:
+                continue
+            chunks.append({
+                "content": text,
+                "file_path": os.path.abspath(file_path),
+                "file_hash": file_hash,
+                "source_type": "word",
+                "title": title,
+                "section_path": "",
+                "para_index": para_idx - 1,
+            })
+        return chunks
+    finally:
+        try:
+            if doc:
+                doc.Close(False)
+        except Exception:
+            pass
+        try:
+            if word:
+                word.Quit()
+        except Exception:
+            pass
+        pythoncom.CoUninitialize()
+
+
 def compute_file_hash(file_path):
     """计算文件 MD5 哈希，用于增量更新判断"""
     h = hashlib.md5()
@@ -208,6 +254,8 @@ def parse_file(file_path):
     ext = os.path.splitext(file_path)[1].lower()
     if ext == ".docx":
         return parse_docx(file_path)
+    elif ext == ".doc":
+        return _parse_doc_via_com(file_path)
     elif ext == ".pdf":
         return parse_pdf(file_path)
     elif ext in (".xlsx", ".xls"):

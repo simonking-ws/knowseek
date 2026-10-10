@@ -13,7 +13,7 @@ from app import indexer, server
 
 if __name__ == "__main__":
     print("=" * 50)
-    print("  知识库搜索 - 本地轻量版")
+    print("  知寻 KnowSeek - 本地文档全文检索")
     print("  技术栈：SQLite FTS5 + jieba + Flask")
     print("=" * 50)
     

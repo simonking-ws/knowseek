@@ -61,6 +61,10 @@ def init_db():
     conn.commit()
     conn.close()
 
+    # 知识图谱表（L0 结构图谱）
+    from . import kg
+    kg.init_tables()
+
 
 def load_custom_dict(dict_path):
     """加载自定义词典"""
@@ -129,6 +133,14 @@ def index_chunks(chunks):
 
     conn.commit()
     conn.close()
+
+    # 结构图谱：随索引同步更新（失败不影响检索主流程）
+    try:
+        from . import kg
+        kg.extract_file(chunks)
+    except Exception:
+        pass
+
     return count
 
 
@@ -143,6 +155,14 @@ def remove_doc(file_path):
         conn.execute("DELETE FROM documents WHERE id = ?", (row["id"],))
         conn.commit()
     conn.close()
+
+    # 同步清理该文档在图谱中的节点与关系
+    if row:
+        try:
+            from . import kg
+            kg.remove_file(file_path)
+        except Exception:
+            pass
 
 
 def get_doc_list(page=1, per_page=20, source_type=None):

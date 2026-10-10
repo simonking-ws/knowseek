@@ -1,8 +1,45 @@
 @echo off
-chcp 65001 >nul
 echo ============================================
-echo   çŸ¥è¯†åº“æœç´¢ - å¯åŠ¨ä¸­...
+echo   ÖªÑ° KnowSeek - Æô¶¯ÖÐ...
 echo ============================================
 cd /d "%~dp0"
-python run.py
-pause
+
+rem ÎÞ´°¿ÚºóÌ¨Æô¶¯£ºÓÅÏÈ pythonw£¨ÎÞ¿ØÖÆÌ¨´°¿Ú£©£¬Êä³öÐ´Èë logs\knowseek.log
+set "PY=%~dp0.venv\Scripts\pythonw.exe"
+if not exist "%PY%" set "PY=%~dp0.venv\Scripts\python.exe"
+if not exist "logs" mkdir logs
+set "LOG=%~dp0logs\knowseek.log"
+
+rem ÒÑÔÚÔËÐÐ£ºÖ±½Ó´ò¿ªä¯ÀÀÆ÷ºóÍË³ö
+netstat -ano | findstr ":9876" | findstr "LISTENING" >nul
+if not errorlevel 1 (
+  echo ·þÎñÒÑÔÚÔËÐÐ£¬ÕýÔÚ´ò¿ªä¯ÀÀÆ÷...
+  start "" http://127.0.0.1:9876
+  timeout /t 3 /nobreak >nul
+  exit /b 0
+)
+
+echo ÕýÔÚºóÌ¨Æô¶¯£¨ÎÞ´°¿Ú£©£¬ÈÕÖ¾: logs\knowseek.log
+start "" /b "%PY%" run.py > "%LOG%" 2>&1
+
+rem µÈ´ý¶Ë¿Ú¾ÍÐ÷£¬×î¶à 20 Ãë
+set waited=0
+:wait
+timeout /t 1 /nobreak >nul
+netstat -ano | findstr ":9876" | findstr "LISTENING" >nul
+if not errorlevel 1 goto ready
+set /a waited+=1
+if %waited% GEQ 20 goto fail
+goto wait
+
+:ready
+echo Æô¶¯³É¹¦: http://127.0.0.1:9876
+start "" http://127.0.0.1:9876
+echo Í£Ö¹·þÎñÇëË«»÷ Í£Ö¹ÖªÑ°.bat
+timeout /t 3 /nobreak >nul
+exit /b 0
+
+:fail
+echo Æô¶¯³¬Ê±£¬Çë²é¿´ÈÕÖ¾: logs\knowseek.log
+timeout /t 8 /nobreak >nul
+exit /b 1
