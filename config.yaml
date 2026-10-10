@@ -1,0 +1,26 @@
+# 关键字搜索知识库 - 本地轻量版配置
+# ==============================
+
+# 文档扫描目录（支持多个目录，用逗号分隔或列表形式）
+scan_dirs:
+  - "C:\\Users\\shuai.wang\\Desktop"
+
+# 支持的文件扩展名
+extensions:
+  - ".docx"
+  - ".txt"
+  - ".md"
+  - ".pdf"
+  - ".xlsx"
+
+# 增量同步间隔（秒）
+sync_interval: 300
+
+# 搜索结果默认返回条数
+max_results: 50
+
+# Flask 服务端口
+port: 9876
+
+# 自定义词典文件路径（可选，一行一个词）
+# custom_dict: "data/custom_dict.txt"
