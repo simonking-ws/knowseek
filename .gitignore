@@ -7,6 +7,7 @@ __pycache__/
 # Virtual Environment
 venv/
 ENV/
+.venv/
 
 # IDE
 .idea/
@@ -14,15 +15,39 @@ ENV/
 *.swp
 *.swo
 
-# Database (generated)
+# Database (generated) —— 索引 + 图谱全在里面，含本地文档内容，绝不入库
 data/*.db
+data/*.db.bak*
+data/*.sqlite
+data/*.sqlite3
+
+# Local config —— 含个人扫描目录与 LLM api_key，不入库（用 config.example.yaml 代替）
+config.yaml
+config.local.yaml
+
+# 实体别名表随仓库提供（通用缩写/别称词典，可自由修改）；含业务实体名的本地扩展请放 data/kg_alias.local.json
+data/kg_alias.local.json
+
+# Uploaded / scanned documents —— 本地上传与扫描新增的语料，不入库
+uploads/
+docs/
+corpus/
+*.docx
+*.doc
+*.pdf
+*.xlsx
+*.xls
+*.pptx
+*.ppt
 
 # OS files
 .DS_Store
 Thumbs.db
 
 # Logs
+logs/
 *.log
 
-# Test files
+# Test / temp scripts
 test_*.py
+_*.py
