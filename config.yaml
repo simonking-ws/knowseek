@@ -1,16 +1,15 @@
 # 知寻 KnowSeek - 本地知识库全文检索配置
 # ==============================
 
-# 文档扫描目录（支持多个目录，用逗号分隔或列表形式）
-scan_dirs: []
-
-# 支持的文件扩展名
+# 支持的文件扩展名（.doc 走 Word COM 解析，仅 Windows；.xls 与 .xlsx 用同一解析器）
 extensions:
   - ".docx"
+  - ".doc"
   - ".txt"
   - ".md"
   - ".pdf"
   - ".xlsx"
+  - ".xls"
 
 # 增量同步间隔（秒）
 sync_interval: 300

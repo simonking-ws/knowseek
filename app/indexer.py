@@ -9,6 +9,7 @@
 import sqlite3
 import os
 import re
+import json
 import html
 import jieba
 
@@ -188,6 +189,69 @@ def clear_all():
     except Exception:
         pass
     return {"removed_docs": total}
+
+
+def get_meta_json(key, default=None):
+    """读 meta 表里的 JSON 值（无记录或解析失败返回 default）"""
+    conn = get_db()
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    conn.close()
+    if not row or row["value"] is None:
+        return default
+    try:
+        return json.loads(row["value"])
+    except Exception:
+        return default
+
+
+def set_meta_json(key, value):
+    """写 meta 表里的 JSON 值"""
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES(?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, json.dumps(value, ensure_ascii=False)),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_doc_dirs(file_only=None):
+    """从已索引文档的真实路径反推扫描根目录（去重）。
+
+    - 上传件用的虚拟路径（upload://文件名）没有磁盘目录，直接跳过
+    - file_only 里的路径是「单独索引的单文件」：用文件本身当扫描根，
+      避免把该文件所在的整个目录都拉进同步范围
+    """
+    file_only = {os.path.normcase(os.path.abspath(p)) for p in (file_only or [])}
+
+    conn = get_db()
+    rows = conn.execute("SELECT file_path FROM documents").fetchall()
+    conn.close()
+
+    dirs, seen = [], set()
+    for r in rows:
+        path = r["file_path"] or ""
+        if not path or "://" in path:
+            continue
+        ap = os.path.abspath(path)
+        d = ap if os.path.normcase(ap) in file_only else os.path.dirname(ap)
+        key = os.path.normcase(d)
+        if key in seen:
+            continue
+        seen.add(key)
+        dirs.append(d)
+
+    # 只保留最外层目录：子目录会被父目录递归覆盖，避免重复扫描
+    dirs.sort(key=len)
+    roots = []
+    for d in dirs:
+        nd = os.path.normcase(d)
+        if any(nd == os.path.normcase(r) or nd.startswith(os.path.normcase(r) + os.sep)
+               for r in roots):
+            continue
+        roots.append(d)
+    return roots
 
 
 def get_doc_list(page=1, per_page=20, source_type=None):

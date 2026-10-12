@@ -1,23 +1,20 @@
 """
 Flask Web 服务 - 搜索界面 + 索引管理 API
-功能：仪表盘Tab、搜索（分页+高亮+点击跳转）、文件列表（批量移除+点击打开）、批量上传文件夹
+功能：仪表盘Tab、搜索（分页+高亮+点击跳转）、文件列表（批量移除+点击打开）、索引本机目录
 """
 
 import os
-import shutil
-import tempfile
 import threading
 import subprocess
 import sys
 import json
 from flask import Flask, request, jsonify, render_template_string, send_file, make_response
 from . import indexer, sync, kg
-from .parser import parse_file, compute_file_hash
+from .parser import compute_file_hash
 
 import yaml
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.yaml")
-CONFIG_EXAMPLE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.example.yaml")
 
 def load_config():
     if os.path.exists(CONFIG_PATH):
@@ -32,9 +29,6 @@ STATIC_DIR = os.path.join(PROJECT_ROOT, "static")
 os.makedirs(STATIC_DIR, exist_ok=True)
 # 静态资源指向项目根 static/（离线内置 ECharts，不走 CDN）
 app = Flask(__name__, static_folder=STATIC_DIR, static_url_path="/static")
-
-# 上传件只保留索引，不保留原文件：入库后用虚拟路径 upload://文件名 标识
-UPLOAD_PREFIX = "upload://"
 
 SUPPORTED_EXTS = {".docx", ".doc", ".txt", ".md", ".pdf", ".xlsx", ".xls"}
 
@@ -100,7 +94,8 @@ body{font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;backgroun
 .source-tag.text{background:#fff3e0;color:#e65100}
 .source-tag.pdf{background:#fce4ec;color:#c62828}
 .source-tag.excel{background:#e8f5e9;color:#2e7d32}
-.result-meta .file-path{color:#999;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.result-meta .file-path{color:#999;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1 1 auto}
+.result-meta > span:not(.file-path),.result-meta > strong{flex:none;white-space:nowrap}
 .result-content{font-size:14px;line-height:1.7;color:#333;background:#fafbfc;border-radius:6px;padding:10px 14px;border-left:3px solid var(--primary);white-space:pre-wrap;word-break:break-word;max-height:200px;overflow-y:auto}
 .result-content mark{background:var(--mark);padding:1px 3px;border-radius:2px;font-weight:500}
 .result-score{font-size:11px;color:#bbb;white-space:nowrap}
@@ -130,28 +125,22 @@ body{font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;backgroun
 .file-table .file-title{font-weight:500;color:var(--primary);cursor:pointer}
 .file-table .remove-btn{color:#e53935;cursor:pointer;border:1px solid #ffcdd2;background:#fff;border-radius:4px;font-size:12px;padding:3px 10px;transition:all .2s}
 .file-table .remove-btn:hover{background:#e53935;color:#fff;border-color:#e53935}
-/* 进度条旁的「终止」按钮（上传 / 索引目录共用） */
+/* 进度条旁的「终止」按钮（索引文件 / 目录） */
 .cancel-btn{color:#e53935;cursor:pointer;border:1px solid #ffcdd2;background:#fff;border-radius:4px;font-size:12px;padding:3px 10px;transition:all .2s;white-space:nowrap}
 .cancel-btn:hover:not(:disabled){background:#e53935;color:#fff;border-color:#e53935}
 .cancel-btn:disabled{opacity:.6;cursor:default}
 .file-table tr.selected{background:#eef2ff}
 .file-table .col-cb input[type=checkbox]{cursor:pointer}
 
-/* ===== Upload ===== */
-.upload-card{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:24px;margin-bottom:16px}
-.upload-area{border:2px dashed var(--border);border-radius:var(--radius);padding:36px;text-align:center;cursor:pointer;transition:all .2s}
-.upload-area:hover{border-color:var(--primary);background:#f8faff}
-.upload-area .upload-icon{font-size:36px;margin-bottom:8px}
-.upload-area .upload-text{font-size:14px;color:var(--text-2)}
-.upload-area.dragover{border-color:var(--primary);background:#eef2ff}
-#file-input,#folder-input{display:none}
-.upload-buttons{display:flex;gap:10px;justify-content:center;margin-top:16px}
-.upload-buttons .action-btn{padding:8px 20px;font-size:14px}
+/* ===== 索引文件 / 目录 ===== */
+.dir-card{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:24px;margin-bottom:16px}
 .local-dir-row{display:flex;gap:8px;justify-content:center;align-items:center;margin-top:14px;flex-wrap:wrap}
 .local-dir-input{width:min(420px,100%);padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px;outline:none;transition:border-color .2s}
 .local-dir-input:focus{border-color:var(--primary)}
 .local-dir-row .action-btn{padding:8px 18px;font-size:14px;white-space:nowrap}
 .local-dir-tip{text-align:center;font-size:12px;color:#aaa;margin-top:8px;line-height:1.6}
+.fmt-tip{text-align:center;font-size:12px;color:#999;margin-top:10px;line-height:1.8}
+.fmt-tag{display:inline-block;background:#f0f2f5;border-radius:4px;padding:2px 8px;margin-right:6px;font-size:12px;color:#555}
 
 /* ===== 知识图谱 ===== */
 .kg-card{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px 20px;margin-bottom:16px}
@@ -207,9 +196,9 @@ body{font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;backgroun
 .kg-link{color:var(--primary);cursor:pointer;text-decoration:underline}
 .kg-mention{padding:6px 0;border-bottom:1px dashed #eee;cursor:pointer}
 .kg-mention:hover{background:#fafbff}
-.upload-progress{margin-bottom:12px}
-.upload-progress-bar{background:#e0e0e0;border-radius:4px;height:6px;overflow:hidden}
-.upload-progress-fill{background:var(--primary);height:100%;transition:width .3s}
+.dir-progress{margin-bottom:12px}
+.dir-progress-bar{background:#e0e0e0;border-radius:4px;height:6px;overflow:hidden}
+.dir-progress-fill{background:var(--primary);height:100%;transition:width .3s}
 
 .empty{text-align:center;padding:48px 20px;color:#999}.empty .icon{font-size:40px;margin-bottom:10px}
 .site-footer{max-width:1200px;margin:0 auto;padding:14px 20px 28px;text-align:center;color:#8a94a6;font-size:12px;border-top:1px solid var(--border)}
@@ -272,7 +261,7 @@ body{font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;backgroun
   <button class="nav-tab" data-tab="search">🔍 搜索</button>
   <button class="nav-tab" data-tab="kg">🕸 知识图谱</button>
   <button class="nav-tab" data-tab="files">📁 文件列表</button>
-  <button class="nav-tab" data-tab="upload">📤 上传文件</button>
+  <button class="nav-tab" data-tab="index">📄 索引文件</button>
 </div>
 
 <div class="container">
@@ -330,28 +319,21 @@ body{font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;backgroun
     <div id="file-pagination" class="pagination"></div>
   </div>
 
-  <!-- ===== Upload Tab ===== -->
-  <div id="tab-upload" style="display:none">
-    <div class="upload-card">
-      <div class="upload-area" id="upload-area">
-        <div class="upload-icon">📎</div>
-        <div class="upload-text">点击选择文件或拖拽到此处</div>
-        <div class="upload-text" style="margin-top:8px;font-size:12px;color:#aaa">支持 .doc .docx .pdf .xlsx .txt .md</div>
-      </div>
-      <div class="upload-buttons">
-        <button class="action-btn" onclick="document.getElementById('file-input').click()">📋 选择文件</button>
-        <button class="action-btn" onclick="document.getElementById('folder-input').click()">📂 选择文件夹</button>
-      </div>
+  <!-- ===== 索引文件 / 目录 Tab ===== -->
+  <div id="tab-index" style="display:none">
+    <div class="dir-card">
       <div class="local-dir-row">
         <input type="text" id="local-dir-path" class="local-dir-input"
-               placeholder="本机目录绝对路径，如 D:\docs（回车即可索引）">
-        <button class="action-btn" id="local-dir-btn" onclick="indexLocalDir()">🚀 索引该目录</button>
+               placeholder="本机文件或目录绝对路径，如 D:\docs\报告.docx 或 D:\docs">
+        <button class="action-btn" id="local-dir-btn" onclick="indexLocalPath()">🚀 开始索引</button>
       </div>
-      <div class="local-dir-tip">推荐：直接索引本机目录，由服务端扫描，不上传、不复制文件，也不会出现"上传该目录下所有文件"的确认弹窗</div>
+      <div class="local-dir-tip">支持单个文件或整个目录（回车即可索引）：由服务端直接扫描，不上传、不复制文件，索引的是文件在本机的真实路径，文件列表里可直接「📁 在系统中打开」</div>
+      <div class="fmt-tip">
+        支持格式：{% for f in formats %}<span class="fmt-tag">{{ f }}</span>{% endfor %}
+        <div style="margin-top:4px;color:#bbb">.doc 走 Word COM 转换，需 Windows 且本机装有 Word；其余格式纯 Python 解析</div>
+      </div>
     </div>
-    <input type="file" id="file-input" multiple accept=".docx,.txt,.md,.doc,.pdf,.xlsx,.xls">
-    <input type="file" id="folder-input" webkitdirectory directory multiple>
-    <div id="upload-results"></div>
+    <div id="index-results"></div>
   </div>
 
   <!-- ===== 知识图谱 Tab ===== -->
@@ -453,10 +435,17 @@ let currentFilePage = 1;
 let selectedFiles = new Set();
 let modalFilePath = '';
 const PER_PAGE = 10;
-const UPLOAD_PREFIX = 'upload://';   // 上传件：只有索引、磁盘上没有原文件
+const UPLOAD_PREFIX = 'upload://';   // 历史遗留的上传件：只有索引、磁盘上没有原文件（现已不再产生）
 function prettyPath(p) {
   let s = p || '';
   return s.startsWith(UPLOAD_PREFIX) ? '☁ ' + s.slice(UPLOAD_PREFIX.length) : s;
+}
+
+// 结果卡片底部的路径：超长时截成「…尾部」，保证一行不换行；完整路径放在 title 里悬浮可见
+const MAX_PATH_LEN = 46;
+function shortPath(p) {
+  let s = prettyPath(p);
+  return s.length > MAX_PATH_LEN ? '…' + s.slice(-(MAX_PATH_LEN - 1)) : s;
 }
 
 // ===== Tab 切换 =====
@@ -466,7 +455,7 @@ document.getElementById('nav-tabs').addEventListener('click', e => {
   let tab = btn.dataset.tab;
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
-  ['dashboard','search','files','upload','kg'].forEach(t => {
+  ['dashboard','search','files','index','kg'].forEach(t => {
     document.getElementById('tab-'+t).style.display = t === tab ? '' : 'none';
   });
   if (tab === 'files') loadFiles(1);
@@ -623,7 +612,7 @@ function dashFilter(type) {
   document.getElementById('tab-dashboard').style.display = 'none';
   document.getElementById('tab-search').style.display = '';
   document.getElementById('tab-files').style.display = 'none';
-  document.getElementById('tab-upload').style.display = 'none';
+  document.getElementById('tab-index').style.display = 'none';
   document.getElementById('tab-kg').style.display = 'none';
   currentFilter = type;
   renderFilters();
@@ -635,7 +624,7 @@ function switchToFiles() {
   document.getElementById('tab-dashboard').style.display = 'none';
   document.getElementById('tab-search').style.display = 'none';
   document.getElementById('tab-files').style.display = '';
-  document.getElementById('tab-upload').style.display = 'none';
+  document.getElementById('tab-index').style.display = 'none';
   document.getElementById('tab-kg').style.display = 'none';
   loadFiles(1);
 }
@@ -718,7 +707,7 @@ function renderResults(results, kw, entities) {
       </div>
       <div class="result-content">${r.highlighted}</div>
       <div class="result-meta" style="margin-top:6px">
-        <span class="file-path" title="${escJS(r.file_path)}">${esc(prettyPath(r.file_path))}</span>
+        <span class="file-path" title="${esc(prettyPath(r.file_path))}">${esc(shortPath(r.file_path))}</span>
         <span>·</span><span style="white-space:nowrap">${esc(loc)}</span>
         <span class="result-score">BM25: ${r.score}</span>
         <span class="kg-link" title="在知识图谱中查看该文档" onclick="event.stopPropagation();focusInKg('${escJS(r.file_path)}')">🕸 图谱</span>
@@ -821,7 +810,7 @@ async function loadFiles(page) {
         <td class="col-source"><span class="source-tag ${sc}">${label}</span></td>
         <td class="col-chunks">${f.chunk_count}</td>
         <td class="col-time" title="${escJS(f.indexed_at||'')}">${esc(f.indexed_at||'')}</td>
-        <td class="col-path file-path" title="${escJS(f.file_path)}">${esc(prettyPath(f.file_path))}</td>
+        <td class="col-path file-path" title="${esc(prettyPath(f.file_path))}">${esc(shortPath(f.file_path))}</td>
         <td class="col-action"><button class="remove-btn" onclick="event.stopPropagation();removeFile('${escJS(f.file_path)}')" title="仅清除索引与图谱，不删除磁盘原文件">移除</button></td>
       </tr>`;
     }).join('');
@@ -891,75 +880,63 @@ async function clearAllDocs() {
       '⚠️ 即将清空全部文档索引与整个知识图谱，此操作不可恢复。\n' +
       (stats ? `当前：${stats}\n` : '') + '是否继续？')) return;
 
-  // 第二次确认：必须输入「清空」，并可选清空扫描目录
+  // 第二次确认：必须输入「清空」
   let r = await showDangerConfirm(
     '二次确认：将删除<b>所有文档、片段、实体、关系与提及</b>。<br>' +
     '<span style="color:#2e7d32">磁盘上的原文件不会被删除。</span><br>' +
     '请输入「清空」二字后点击「确认清空」：',
-    '清空',
-    '同时清空 config.yaml 的 scan_dirs（否则下次「同步索引」会把这些目录重新索引回来）'
+    '清空'
   );
   if (!r || !r.ok) return;
 
   let resp = await fetch('/api/files/clear', {
     method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({confirm: 'CLEAR', clear_scan_dirs: !!r.checked})
+    body: JSON.stringify({confirm: 'CLEAR'})
   });
   let data = await resp.json();
   if (!data.ok) { showToast('清空失败: ' + (data.error || ''), 'error'); return; }
 
-  showToast(
-    `已清空 ${data.removed_docs || 0} 篇文档与知识图谱` +
-    (data.cleared_scan_dirs ? '，scan_dirs 已一并清空' : ''), 'success');
+  showToast(`已清空 ${data.removed_docs || 0} 篇文档与知识图谱`, 'success');
   selectedFiles.clear();
   updateBatchBtn();
   loadFiles(1);
   showStats();
 }
 
-// ===== 上传 =====
-const uploadArea = document.getElementById('upload-area');
-const fileInput = document.getElementById('file-input');
-const folderInput = document.getElementById('folder-input');
-
-['dragover','dragenter'].forEach(e => uploadArea.addEventListener(e, ev => { ev.preventDefault(); uploadArea.classList.add('dragover'); }));
-['dragleave','drop'].forEach(e => uploadArea.addEventListener(e, ev => { ev.preventDefault(); uploadArea.classList.remove('dragover'); }));
-uploadArea.addEventListener('drop', ev => handleFiles(ev.dataTransfer.files));
-fileInput.addEventListener('change', ev => { handleFiles(ev.target.files); fileInput.value = ''; });
-folderInput.addEventListener('change', ev => { handleFiles(ev.target.files); folderInput.value = ''; });
-
-// ===== 索引本机目录（服务端直接扫描，不经浏览器上传）=====
+// ===== 索引本机文件 / 目录（服务端直接扫描，不经浏览器上传）=====
 const localDirInput = document.getElementById('local-dir-path');
 const localDirBtn = document.getElementById('local-dir-btn');
 if (localDirInput) {
-  localDirInput.addEventListener('keydown', ev => { if (ev.key === 'Enter') indexLocalDir(); });
+  localDirInput.addEventListener('keydown', ev => { if (ev.key === 'Enter') indexLocalPath(); });
 }
 
-async function indexLocalDir() {
+async function indexLocalPath() {
   const p = (localDirInput.value || '').trim();
-  if (!p) { showToast('请先填写本机目录路径', 'error'); localDirInput.focus(); return; }
+  if (!p) { showToast('请先填写本机文件或目录路径', 'error'); localDirInput.focus(); return; }
   localDirBtn.disabled = true;
   try {
-    // 预检：目录下没有可索引的文件时直接终止，不再解析入库
+    // 预检：路径下没有可索引的文件时直接终止，不再解析入库
     localDirBtn.textContent = '🔍 检查中...';
     let pv = await fetch('/api/scan_preview', {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({path: p})
     }).then(r => r.json());
     if (pv.error) { showToast(pv.error, 'error'); return; }
     if (!pv.count) {
-      showToast('该目录下没有可索引的文件，已终止', 'error');
-      let r0 = document.getElementById('upload-results');
+      showToast((pv.kind === 'file' ? '该文件不是受支持的格式' : '该目录下没有可索引的文件') + '，已终止', 'error');
+      let r0 = document.getElementById('index-results');
       r0.innerHTML = '';
       let tip = document.createElement('div');
       tip.style.cssText = 'color:#c62828;padding:8px 4px;font-size:13px;line-height:1.6;word-break:break-all';
-      tip.textContent = '⛔ ' + pv.path + ' 下没有找到可索引的文件（支持 .doc .docx .pdf .xlsx .xls .txt .md），未执行索引';
+      tip.textContent = '⛔ ' + pv.path +
+        (pv.kind === 'file' ? ' 不是受支持的格式（支持 .doc .docx .pdf .xlsx .xls .txt .md），未执行索引'
+                            : ' 下没有找到可索引的文件（支持 .doc .docx .pdf .xlsx .xls .txt .md），未执行索引');
       r0.appendChild(tip);
       return;
     }
 
     localDirBtn.textContent = '⏳ 索引中...';
-    showToast('发现 ' + pv.count + ' 个可索引文件，开始索引...');
-    let resp = await fetch('/api/index_dir', {
+    showToast(pv.kind === 'file' ? '开始索引该文件...' : ('发现 ' + pv.count + ' 个可索引文件，开始索引...'));
+    let resp = await fetch('/api/index_path', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({path: p})
@@ -968,20 +945,29 @@ async function indexLocalDir() {
     if (d.error) { showToast('索引失败: ' + d.error, 'error'); return; }
 
     // 进度条：服务端后台线程索引，前端每 500ms 拉一次进度
-    let results = document.getElementById('upload-results');
+    let results = document.getElementById('index-results');
     results.innerHTML = '';
     let progWrap = document.createElement('div');
-    progWrap.className = 'upload-progress';
+    progWrap.className = 'dir-progress';
     progWrap.innerHTML = `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
         <div style="flex:1;font-size:13px;color:#666;word-break:break-all" id="dir-prog-text">准备索引 ${pv.count} 个文件...</div>
-        <button class="cancel-btn" id="dir-cancel-btn" onclick="cancelIndexDir()">⛔ 终止</button>
+        <button class="cancel-btn" id="dir-cancel-btn" onclick="cancelIndex()">⛔ 终止</button>
       </div>
-      <div class="upload-progress-bar"><div class="upload-progress-fill" id="dir-prog-fill" style="width:0%"></div></div>`;
+      <div class="dir-progress-bar"><div class="dir-progress-fill" id="dir-prog-fill" style="width:0%"></div></div>`;
     results.appendChild(progWrap);
 
+    // 逐文件结果列表：每个文件处理完即追加一行
+    let resultList = document.createElement('div');
+    resultList.id = 'dir-result-list';
+    resultList.style.cssText = 'max-height:320px;overflow-y:auto;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:4px 10px';
+    results.appendChild(resultList);
+
+    let seq = 0;
     await new Promise(resolve => {
       let timer = setInterval(async () => {
-        let prog = await fetch('/api/index_progress').then(r => r.json());
+        let prog = await fetch('/api/index_progress?since=' + seq).then(r => r.json());
+        (prog.items || []).forEach(it => appendIndexResult(resultList, it));
+        seq = prog.seq || seq;
         let pct = prog.total ? Math.round(prog.done / prog.total * 100) : (prog.finished ? 100 : 0);
         let fill = document.getElementById('dir-prog-fill');
         let text = document.getElementById('dir-prog-text');
@@ -996,7 +982,7 @@ async function indexLocalDir() {
         if (!prog.running) {
           clearInterval(timer);
           if (cbtn) cbtn.remove();
-          finishIndexDir(prog, results);
+          finishIndexPath(prog, results, resultList);
           resolve();
         }
       }, 500);
@@ -1009,36 +995,60 @@ async function indexLocalDir() {
   }
 }
 
-async function cancelIndexDir() {
+async function cancelIndex() {
   let btn = document.getElementById('dir-cancel-btn');
   if (btn) { btn.disabled = true; btn.textContent = '⏹ 终止中'; }
   let d = await fetch('/api/index_cancel', {method:'POST'}).then(r => r.json());
   showToast(d.note || '已请求终止', 'error');
 }
 
-function finishIndexDir(d, results) {
-  results.innerHTML = '';
+// 目录索引的逐条结果：新增 / 更新 / 跳过 / 失败
+const INDEX_RESULT_STYLE = {
+  added:   ['✅', '#2e7d32'],
+  updated: ['🔄', '#1565c0'],
+  skipped: ['⏩', '#999'],
+  error:   ['❌', '#c62828'],
+};
+function appendIndexResult(container, item) {
+  let fullPath = item.path || '';
+  let name = fullPath.replace(/\\/g, '/').split('/').pop() || fullPath;
+  let [icon, color] = INDEX_RESULT_STYLE[item.status] || INDEX_RESULT_STYLE.added;
+  appendResult(container, icon, name, item.detail || '', color, fullPath);
+  container.scrollTop = container.scrollHeight;      // 始终跟着最新一条
+}
+
+function finishIndexPath(d, results, resultList) {
+  // 移除进度条，保留逐文件结果列表
+  let progWrap = results.querySelector('.dir-progress');
+  if (progWrap) progWrap.remove();
+  let before = el => results.insertBefore(el, resultList || null);
+
+  let isFile = d.kind === 'file';
   let div = document.createElement('div');
   div.style.cssText = 'color:#2e7d32;padding:8px 4px;font-size:13px;line-height:1.6;word-break:break-all';
   if (d.cancelled) {
     div.style.color = '#ef6c00';
     div.textContent = `⛔ 已终止索引: ${d.path || ''}（已处理 ${d.done}/${d.total}：新增 ${d.added} / 更新 ${d.updated} / 未变更 ${d.skipped}，已入库的会保留）`;
+  } else if (isFile) {
+    div.textContent = `✅ 已索引文件: ${d.path || ''}（新增 ${d.added} / 更新 ${d.updated} / 未变更 ${d.skipped}）`;
   } else {
     div.textContent = '✅ 已索引目录: ' + (d.path || '') + '（共 ' + d.total + ' 个文件：新增 ' + d.added + ' / 更新 ' + d.updated + ' / 未变更 ' + d.skipped + '）';
   }
-  results.appendChild(div);
+  before(div);
 
   let dirTip = document.createElement('div');
   dirTip.style.cssText = 'color:#666;padding:4px 4px 8px;font-size:12px;line-height:1.6;word-break:break-all';
-  dirTip.textContent = '📌 该目录已写入 config.yaml 的 scan_dirs，后续点「🔄 同步」会自动增量更新；列表/搜索结果里显示的就是文件在本机的真实路径，可直接「📁 在系统中打开」。';
-  results.appendChild(dirTip);
+  dirTip.textContent = isFile
+    ? '📌 索引的是该文件在本机的真实路径，文件列表/搜索结果里可直接「📁 在系统中打开」。'
+    : '📌 后续点「🔄 同步」会按这些已索引文档所在目录自动增量更新；列表/搜索结果里显示的就是文件在本机的真实路径，可直接「📁 在系统中打开」。';
+  before(dirTip);
 
   let errs = d.errors || [];
   if (errs.length) {
     let eDiv = document.createElement('div');
     eDiv.style.cssText = 'color:#c62828;padding:8px 4px;font-size:13px;line-height:1.6;word-break:break-all';
     eDiv.textContent = '⚠️ 部分文件解析失败: ' + errs.slice(0, 10).join('; ') + (errs.length > 10 ? ('（共 ' + errs.length + ' 条）') : '');
-    results.appendChild(eDiv);
+    before(eDiv);
   }
   showToast(d.cancelled
     ? `已终止: 已处理 ${d.done}/${d.total}，新增 ${d.added} | 更新 ${d.updated} | 跳过 ${d.skipped}`
@@ -1047,88 +1057,7 @@ function finishIndexDir(d, results) {
   showStats();
 }
 
-async function handleFiles(fileList) {
-  let allFiles = Array.from(fileList);
-  if (!allFiles.length) { await showAlert('未选择任何文件'); return; }
-
-  let files = allFiles.filter(f => {
-    let ext = '.' + f.name.split('.').pop().toLowerCase();
-    return ['.docx','.txt','.md','.doc','.pdf','.xlsx','.xls'].includes(ext);
-  });
-
-  let skipped = allFiles.length - files.length;
-
-  // 没有可索引的文件：直接终止，不再弹统计框、不再建进度条
-  if (!files.length) {
-    await showAlert('没有需要索引的文件：选中的 ' + allFiles.length + ' 个文件均不是受支持的格式（.doc .docx .pdf .xlsx .xls .txt .md），已终止');
-    return;
-  }
-
-  let results = document.getElementById('upload-results');
-  let summary = skipped > 0 ? `（跳过 ${skipped} 个不支持的文件）` : '';
-  results.innerHTML = '';
-  let progWrap = document.createElement('div');
-  progWrap.className = 'upload-progress';
-  progWrap.innerHTML = `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
-      <div style="flex:1;font-size:13px;color:#666" id="prog-text">上传中 0/${files.length}${summary}...</div>
-      <button class="cancel-btn" id="upload-cancel-btn" onclick="cancelUpload()">⛔ 终止</button>
-    </div>
-    <div class="upload-progress-bar"><div class="upload-progress-fill" id="prog-fill" style="width:0%"></div></div>`;
-  results.appendChild(progWrap);
-  let resultList = document.createElement('div');
-  resultList.id = 'upload-result-list';
-  results.appendChild(resultList);
-
-  let progText = document.getElementById('prog-text');
-  let progFill = document.getElementById('prog-fill');
-  let cancelBtn = document.getElementById('upload-cancel-btn');
-
-  uploadCancelled = false;
-  uploadAbort = null;
-  let ok = 0, fail = 0, dup = 0, done = 0;
-  for (let i = 0; i < files.length; i++) {
-    if (uploadCancelled) break;
-    let formData = new FormData();
-    formData.append('file', files[i]);
-    progText.textContent = `上传 ${i+1}/${files.length}${summary} (✅${ok} 🔄${dup} ❌${fail}) - ${files[i].name}`;
-    uploadAbort = new AbortController();
-    try {
-      let resp = await fetch('/api/upload', {method:'POST', body: formData, signal: uploadAbort.signal});
-      let data = await resp.json();
-      if (data.error) { fail++; appendResult(resultList, '❌', files[i].name, data.error, '#c62828'); }
-      else if (data.duplicate) { dup++; appendResult(resultList, '🔄', files[i].name, '已存在，跳过', '#1565c0'); }
-      else { ok++; appendResult(resultList, '✅', files[i].name, data.indexed + ' 片段', '#2e7d32'); }
-    } catch(err) {
-      if (uploadCancelled) break;                 // 用户主动终止：当前这个不再计入失败
-      fail++; appendResult(resultList, '❌', files[i].name, '上传失败', '#c62828');
-    }
-    done = i + 1;
-    progFill.style.width = Math.round(done / files.length * 100) + '%';
-    progText.textContent = `上传 ${done}/${files.length}${summary} (✅${ok} 🔄${dup} ❌${fail})`;
-    await new Promise(r => setTimeout(r, 0));
-  }
-  uploadAbort = null;
-  if (cancelBtn) cancelBtn.remove();
-  let tail = uploadCancelled ? `已终止 ${done}/${files.length}` : `上传完成 ${done}/${files.length}`;
-  progText.textContent = `${tail}${summary} (✅${ok} 🔄${dup} ❌${fail})`;
-  if (!uploadCancelled) progFill.style.width = '100%';
-  showToast(uploadCancelled
-    ? `已终止上传: 已完成 ${done}/${files.length}（${ok} 新增, ${dup} 跳过, ${fail} 失败）`
-    : `上传完成: ${ok} 新增, ${dup} 跳过, ${fail} 失败`, uploadCancelled ? 'error' : (ok ? 'success' : 'error'));
-  showStats();
-}
-
-let uploadCancelled = false;    // 用户点了「终止」
-let uploadAbort = null;         // 当前上传请求的 AbortController
-function cancelUpload() {
-  uploadCancelled = true;
-  if (uploadAbort) uploadAbort.abort();
-  let btn = document.getElementById('upload-cancel-btn');
-  if (btn) { btn.disabled = true; btn.textContent = '⏹ 终止中'; }
-  showToast('已请求终止，当前文件传完即停止', 'error');
-}
-
-function appendResult(container, icon, filename, status, color) {
+function appendResult(container, icon, filename, status, color, title) {
   let div = document.createElement('div');
   div.style.cssText = `color:${color};padding:8px 4px;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;gap:10px;line-height:1.5;`;
   let iconSpan = document.createElement('span');
@@ -1137,6 +1066,7 @@ function appendResult(container, icon, filename, status, color) {
   let nameSpan = document.createElement('span');
   nameSpan.textContent = filename;
   nameSpan.style.cssText = 'flex:1;word-break:break-all;';
+  nameSpan.title = title || filename;
   let statusSpan = document.createElement('span');
   statusSpan.textContent = status;
   statusSpan.style.cssText = 'flex-shrink:0;font-size:13px;opacity:0.85;';
@@ -1326,7 +1256,7 @@ async function applyKgAlias() {
 function focusKgEntity(id, name) {
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
   document.querySelector('[data-tab="kg"]').classList.add('active');
-  ['dashboard','search','files','upload','kg'].forEach(t => {
+  ['dashboard','search','files','index','kg'].forEach(t => {
     document.getElementById('tab-' + t).style.display = t === 'kg' ? '' : 'none';
   });
   document.getElementById('kg-q').value = name;
@@ -1340,7 +1270,7 @@ function focusInKg(filePath) {
   let name = ((filePath || '').split(/[\\/]/).pop() || '').replace(/\.[^.]+$/, '');
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
   document.querySelector('[data-tab="kg"]').classList.add('active');
-  ['dashboard','search','files','upload','kg'].forEach(t => {
+  ['dashboard','search','files','index','kg'].forEach(t => {
     document.getElementById('tab-' + t).style.display = t === 'kg' ? '' : 'none';
   });
   document.getElementById('kg-q').value = name;
@@ -1352,7 +1282,7 @@ function focusInKg(filePath) {
 function searchKgEntity(name) {
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
   document.querySelector('[data-tab="search"]').classList.add('active');
-  ['dashboard','search','files','upload','kg'].forEach(t => {
+  ['dashboard','search','files','index','kg'].forEach(t => {
     document.getElementById('tab-' + t).style.display = t === 'search' ? '' : 'none';
   });
   document.getElementById('keyword').value = name;
@@ -1509,9 +1439,15 @@ loadDashboard();
 
 # ==================== API 路由 ====================
 
+def _supported_exts():
+    """当前生效的受支持扩展名：优先 config.yaml，缺省用内置集合"""
+    exts = config.get("extensions") or list(SUPPORTED_EXTS)
+    return sorted(str(e).lower() for e in exts)
+
+
 @app.route("/")
 def index_page():
-    resp = make_response(render_template_string(HTML_TEMPLATE))
+    resp = make_response(render_template_string(HTML_TEMPLATE, formats=_supported_exts()))
     resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
     resp.headers['Pragma'] = 'no-cache'
     resp.headers['Expires'] = '0'
@@ -1577,53 +1513,15 @@ def api_batch_remove():
 def api_clear_all():
     """清空全部文档索引 + 知识图谱（只清库，绝不删除磁盘原文件）
 
-    需带 confirm="CLEAR"；clear_scan_dirs=true 时顺带清空 config.yaml 的扫描目录，
-    避免下次「同步索引」又把清空的内容重新索引回来。
+    需带 confirm="CLEAR"。扫描根目录由已索引文档反推，清空后自然为空，
+    无需再维护 config.yaml 的 scan_dirs。
     """
     data = request.json or {}
     if data.get("confirm") != "CLEAR":
         return jsonify({"error": "缺少确认标记"}), 400
     result = indexer.clear_all() or {}
     result["ok"] = True
-    result["cleared_scan_dirs"] = _clear_scan_dirs_in_config() if data.get("clear_scan_dirs") else False
     return jsonify(result)
-
-
-@app.route("/api/upload", methods=["POST"])
-def api_upload():
-    if "file" not in request.files:
-        return jsonify({"error": "未上传文件"}), 400
-    file = request.files["file"]
-    if file.filename == "":
-        return jsonify({"error": "文件名为空"}), 400
-    ext = os.path.splitext(file.filename)[1].lower()
-    if ext not in SUPPORTED_EXTS:
-        return jsonify({"error": f"不支持的格式: {ext}"}), 400
-
-    # webkitdirectory 上传时 filename 可能含路径，只取文件名
-    filename = file.filename.replace("\\", "/").split("/")[-1]
-    virtual_path = UPLOAD_PREFIX + filename      # 只留索引，不留原文件
-
-    # 解析用临时文件，入库后立刻删除
-    tmp_dir = tempfile.mkdtemp(prefix="ks_upload_")
-    tmp_path = os.path.join(tmp_dir, filename)
-    try:
-        file.save(tmp_path)
-        chunks = parse_file(tmp_path)
-        for c in chunks:
-            c["file_path"] = virtual_path
-        count = indexer.index_chunks(chunks)
-        try:
-            kg.rebuild_file(virtual_path)        # 同步图谱（读 chunks_fts，不碰原文件）
-        except Exception:
-            pass
-        if count == 0:
-            return jsonify({"ok": True, "indexed": 0, "filename": filename, "duplicate": True})
-        return jsonify({"ok": True, "indexed": count, "filename": filename, "duplicate": False})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 @app.route("/api/file_content")
@@ -1707,14 +1605,16 @@ def api_open_file():
 @app.route("/api/sync", methods=["POST"])
 def api_sync():
     exts = config.get("extensions", list(SUPPORTED_EXTS))
-    configured = _scan_dirs_from_config()
-    dirs = [d for d in configured if os.path.isdir(d)]
-    missing = [d for d in configured if not os.path.isdir(d)]
+    # 扫描根来自「索引文件/目录」时已入库的文档路径，不再读 config.yaml
+    configured = _scan_dirs_from_db()
+    exists = lambda p: os.path.isdir(p) or os.path.isfile(p)
+    dirs = [d for d in configured if exists(d)]
+    missing = [d for d in configured if not exists(d)]
 
     if not dirs:
         # 没有可用目录时绝不 prune：否则会把所有磁盘文档判成"已删除"
         return jsonify({"added": 0, "updated": 0, "skipped": 0, "removed": 0,
-                        "errors": ["未配置有效的 scan_dirs（config.yaml），已跳过同步以免误删索引"]})
+                        "errors": ["尚未索引过任何本机文件或目录，已跳过同步以免误删索引"]})
 
     if missing:
         # 部分目录不可达（如移动硬盘未接）时同样不清理，避免误删
@@ -1729,15 +1629,22 @@ def api_sync():
 
 @app.route("/api/scan_preview", methods=["POST"])
 def api_scan_preview():
-    """预检：只统计目录下受支持的文件数量与总大小，不解析、不入库"""
+    """预检：只统计文件或目录下受支持的文件数量与总大小，不解析、不入库"""
     data = request.json or {}
     dir_path = (data.get("path") or "").strip().strip('"').strip("'")
     if not dir_path:
-        return jsonify({"error": "目录路径不能为空"}), 400
-    if not os.path.isdir(dir_path):
-        return jsonify({"error": f"目录不存在: {dir_path}"}), 400
+        return jsonify({"error": "文件或目录路径不能为空"}), 400
+    if not (os.path.isfile(dir_path) or os.path.isdir(dir_path)):
+        return jsonify({"error": f"路径不存在: {dir_path}"}), 400
 
     exts = set(str(e).lower() for e in (config.get("extensions") or list(SUPPORTED_EXTS)))
+
+    # 单个文件：直接预检这一个
+    if os.path.isfile(dir_path):
+        supported = os.path.splitext(dir_path)[1].lower() in exts
+        return jsonify({"path": dir_path, "kind": "file", "count": 1 if supported else 0,
+                        "total_size": os.path.getsize(dir_path) if supported else 0})
+
     count = 0
     total_size = 0
     for root, dirs, fnames in os.walk(dir_path):
@@ -1749,152 +1656,62 @@ def api_scan_preview():
                     total_size += os.path.getsize(os.path.join(root, fname))
                 except OSError:
                     pass
-    return jsonify({"path": dir_path, "count": count, "total_size": total_size})
+    return jsonify({"path": dir_path, "kind": "dir", "count": count, "total_size": total_size})
 
 
-def _scan_dirs_from_config():
-    dirs = config.get("scan_dirs") or []
-    if isinstance(dirs, str):
-        dirs = [d.strip() for d in dirs.split(",") if d.strip()]
-    return [str(d) for d in dirs if str(d).strip()]
+FILE_ONLY_KEY = "index_file_only"      # meta 表键：单独索引的单文件路径列表
 
 
-def _insert_scan_dir_line(text, dir_path):
-    """在保留注释的前提下把目录插进 config.yaml 的 scan_dirs 列表；无法定位则返回 None"""
-    lines = text.splitlines()
-    idx = None
-    for i, ln in enumerate(lines):
-        if ln.split("#", 1)[0].strip().startswith("scan_dirs:"):
-            idx = i
-            break
-    if idx is None:
-        return None
-
-    item = "  - " + json.dumps(dir_path, ensure_ascii=False)
-    last = idx
-    j = idx + 1
-    while j < len(lines):
-        s = lines[j].strip()
-        if s.startswith("- "):
-            last = j
-        elif s == "" or s.startswith("#"):
-            pass
-        else:
-            break
-        j += 1
-
-    if last == idx:
-        lines[idx] = "scan_dirs:\n" + item      # 原为空列表/单行写法
-    else:
-        lines.insert(last + 1, item)
-    return "\n".join(lines) + "\n"
-
-
-def _clear_scan_dirs_in_config():
-    """保留注释地清空 config.yaml 里 scan_dirs 的列表项（只删 "- xxx" 行）"""
-    config["scan_dirs"] = []
-    if not os.path.exists(CONFIG_PATH):
-        return True
+def _file_only_paths():
+    """单独索引过的单文件（同步时只扫文件本身，不牵连所在目录）"""
     try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            lines = f.read().splitlines()
-    except OSError as e:
-        app.logger.warning("读取 config.yaml 失败: %s", e)
-        return False
+        return [p for p in (indexer.get_meta_json(FILE_ONLY_KEY, []) or []) if p]
+    except Exception as e:
+        app.logger.warning("读取单文件索引记录失败: %s", e)
+        return []
 
-    idx = None
-    for i, ln in enumerate(lines):
-        if ln.split("#", 1)[0].strip().startswith("scan_dirs:"):
-            idx = i
-            break
-    if idx is None:
-        return True
 
-    end = idx
-    j = idx + 1
-    while j < len(lines):
-        s = lines[j].strip()
-        if s.startswith("- "):
-            end = j
-        elif s == "" or s.startswith("#"):
-            pass
-        else:
-            break
-        j += 1
-
-    kept = [ln for k, ln in enumerate(lines)
-            if not (idx < k <= end and ln.strip().startswith("- "))]
-
-    # 列表项已清空：把 scan_dirs 归一化成空列表，保留行尾注释
-    head, sep, tail = kept[idx].partition("#")
-    if head.strip() == "scan_dirs:" or "[" in head:
-        kept[idx] = "scan_dirs: []" + (("  " + sep + tail) if sep else "")
+def _add_file_only(path):
+    paths = [p for p in _file_only_paths()
+             if os.path.normcase(os.path.abspath(p)) != os.path.normcase(os.path.abspath(path))]
+    paths.append(os.path.abspath(path))
     try:
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            f.write("\n".join(kept) + "\n")
-    except OSError as e:
-        app.logger.warning("写入 config.yaml 失败: %s", e)
-        return False
-    return True
+        indexer.set_meta_json(FILE_ONLY_KEY, paths)
+    except Exception as e:
+        app.logger.warning("记录单文件索引失败: %s", e)
 
 
-def _persist_scan_dir(dir_path):
-    """把索引过的目录写入 config.yaml 的 scan_dirs，后续「同步」会自动覆盖它"""
-    dirs = _scan_dirs_from_config()
-    key = os.path.normcase(os.path.abspath(dir_path))
-    if any(os.path.normcase(os.path.abspath(d)) == key for d in dirs):
-        return dirs                              # 已配置过，不重复写文件
-    dirs.append(dir_path)
-
-    written = False
-    if os.path.exists(CONFIG_PATH):
-        try:
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                text = f.read()
-            new_text = _insert_scan_dir_line(text, dir_path)
-            if new_text:
-                with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-                    f.write(new_text)
-                written = True
-        except OSError as e:
-            app.logger.warning("更新 config.yaml 失败: %s", e)
-
-    if not written:                              # 无 config.yaml 或没有 scan_dirs 键：按模板生成
-        cfg = {}
-        if os.path.exists(CONFIG_EXAMPLE_PATH):
-            try:
-                with open(CONFIG_EXAMPLE_PATH, "r", encoding="utf-8") as f:
-                    cfg = yaml.safe_load(f) or {}
-            except Exception:
-                cfg = {}
-        cfg["scan_dirs"] = dirs
-        try:
-            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-                yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
-        except OSError as e:
-            app.logger.warning("写入 config.yaml 失败: %s", e)
-    config["scan_dirs"] = dirs
-    return dirs
+def _scan_dirs_from_db():
+    """扫描根目录不再写入 config.yaml，直接从已索引文档的真实路径反推"""
+    try:
+        return indexer.get_doc_dirs(file_only=_file_only_paths())
+    except Exception as e:
+        app.logger.warning("读取已索引目录失败: %s", e)
+        return []
 
 
 # 目录索引进度：后台线程写入，前端轮询 /api/index_progress 展示进度条
 _INDEX_LOCK = threading.Lock()
 _INDEX_CANCEL = threading.Event()          # 前端点「终止」时置位
 _INDEX_PROGRESS = {"running": False, "finished": False, "cancelled": False, "path": "",
-                   "done": 0, "total": 0, "current": "",
-                   "added": 0, "updated": 0, "skipped": 0, "errors": []}
+                   "kind": "dir", "done": 0, "total": 0, "current": "",
+                   "added": 0, "updated": 0, "skipped": 0, "errors": [], "items": []}
 
 
-def _index_dir_worker(dir_path, exts):
+def _index_path_worker(target_path, exts):
     def on_progress(done, total, current):
         with _INDEX_LOCK:
             _INDEX_PROGRESS.update({"done": done, "total": total, "current": current})
         return not _INDEX_CANCEL.is_set()   # 返回 False → sync 立即停止
 
+    def on_result(item):
+        with _INDEX_LOCK:
+            _INDEX_PROGRESS["items"].append(item)
+
     try:
-        # prune=False：只增量索引该目录，不影响 uploads / 其它 scan_dirs 的索引
+        # prune=False：只增量索引该路径，不影响其它已索引目录的索引
         added, updated, skipped, _, errors = sync.scan_and_index(
-            [dir_path], exts, prune=False, progress_cb=on_progress)
+            [target_path], exts, prune=False, progress_cb=on_progress, result_cb=on_result)
         with _INDEX_LOCK:
             _INDEX_PROGRESS.update({"added": added, "updated": updated, "skipped": skipped,
                                     "errors": list(errors), "finished": True,
@@ -1909,36 +1726,52 @@ def _index_dir_worker(dir_path, exts):
             _INDEX_PROGRESS["current"] = ""
 
 
-@app.route("/api/index_dir", methods=["POST"])
-def api_index_dir():
-    """索引本机目录：服务端直接扫描（不经浏览器上传）；后台线程执行，进度走 /api/index_progress"""
+@app.route("/api/index_path", methods=["POST"])
+def api_index_path():
+    """索引本机文件或目录：服务端直接扫描（不经浏览器上传）；后台线程执行，进度走 /api/index_progress"""
     data = request.json or {}
-    dir_path = (data.get("path") or "").strip().strip('"').strip("'")
-    if not dir_path:
-        return jsonify({"error": "目录路径不能为空"}), 400
-    if not os.path.isdir(dir_path):
-        return jsonify({"error": f"目录不存在: {dir_path}"}), 400
+    target_path = (data.get("path") or "").strip().strip('"').strip("'")
+    if not target_path:
+        return jsonify({"error": "文件或目录路径不能为空"}), 400
+    if not (os.path.isfile(target_path) or os.path.isdir(target_path)):
+        return jsonify({"error": f"路径不存在: {target_path}"}), 400
+    kind = "file" if os.path.isfile(target_path) else "dir"
+    if kind == "file":
+        _add_file_only(target_path)      # 单文件：同步时只扫它自己
 
     with _INDEX_LOCK:
         if _INDEX_PROGRESS["running"]:
             return jsonify({"error": "已有索引任务在进行中，请等它跑完或先点「终止」"}), 409
         _INDEX_PROGRESS.update({"running": True, "finished": False, "cancelled": False,
-                                "path": dir_path, "done": 0, "total": 0, "current": "",
-                                "added": 0, "updated": 0, "skipped": 0, "errors": []})
+                                "path": target_path, "kind": kind, "done": 0, "total": 0,
+                                "current": "", "added": 0, "updated": 0, "skipped": 0, "errors": []})
+        _INDEX_PROGRESS["items"] = []
     _INDEX_CANCEL.clear()
 
     exts = config.get("extensions", list(SUPPORTED_EXTS))
-    scan_dirs = _persist_scan_dir(dir_path)
-    threading.Thread(target=_index_dir_worker, args=(dir_path, exts), daemon=True).start()
-    return jsonify({"started": True, "path": dir_path, "scan_dirs": scan_dirs})
+    threading.Thread(target=_index_path_worker, args=(target_path, exts), daemon=True).start()
+    return jsonify({"started": True, "path": target_path, "kind": kind})
 
 
 @app.route("/api/index_progress")
 def api_index_progress():
-    """目录索引进度（done/total/current + 计数 + 错误 + 是否已终止）"""
+    """索引进度（done/total/current + 计数 + 错误 + 是否已终止）
+
+    items：自上次轮询（since）以来新处理完的文件，供前端逐条追加展示；
+    seq 是已产生的结果总条数，前端下次带上它作游标。
+    """
+    since = 0
+    try:
+        since = int(request.args.get("since", 0) or 0)
+    except ValueError:
+        pass
     with _INDEX_LOCK:
         snap = dict(_INDEX_PROGRESS)
         snap["errors"] = list(snap.get("errors") or [])
+        items = list(_INDEX_PROGRESS.get("items") or [])
+    snap.pop("items", None)
+    snap["items"] = items[since:] if 0 <= since <= len(items) else []
+    snap["seq"] = len(items)
     snap["cancelling"] = snap["running"] and _INDEX_CANCEL.is_set()
     return jsonify(snap)
 
@@ -2067,7 +1900,7 @@ def api_download():
     return send_file(file_path, as_attachment=False)
 
 
-# ==================== 后台自动同步（已禁用，统一从上传处理） ====================
+# ==================== 后台自动同步（已禁用，索引由前端「索引文件」主动触发） ====================
 
 def start_app():
     indexer.init_db()
