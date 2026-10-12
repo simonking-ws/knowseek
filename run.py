@@ -9,6 +9,20 @@ import os
 # 确保能找到 app 包
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# 编码处理：只在输出被重定向时（例如 `start /b pythonw run.py > logs\knowseek.log`）
+# 强制 UTF-8，保证日志文件在任何语言的 Windows 上都是 UTF-8，而不会被系统
+# 代码页写成 GBK / CP1252 导致编辑器打开乱码。
+# 前台运行时保留系统编码，避免控制台里的中文反而乱码。
+# pythonw 下 stdout 可能为 None，需逐个判空。
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is None:
+        continue
+    try:
+        if not _stream.isatty():
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 from app import indexer, server
 
 if __name__ == "__main__":
