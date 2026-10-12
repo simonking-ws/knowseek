@@ -39,29 +39,23 @@ if not errorlevel 1 goto already
 echo [1/3] Locating a python runtime ...
 if not exist "%VENV%" goto syspy
 
+rem The bundled .venv ships its own stdlib (.venv\Lib) and extensions (.venv\DLLs),
+rem so it does not depend on the machine where it was originally created.
+rem PYTHONHOME points the interpreter at those directories; without it a venv
+rem would look up the "home" key in pyvenv.cfg, which only exists on the
+rem original build machine. On the original machine both settings agree, so
+rem this is safe everywhere. Cleared again whenever we fall back to a
+rem system python (see below).
+if exist "%ROOT%.venv\Lib\os.py" set "PYTHONHOME=%ROOT%.venv"
+
 "%VENV%" -c "import sys" >nul 2>&1
 if not errorlevel 1 goto venvoke
 
-echo   - bundled venv is not usable on this machine, trying to repair it ...
-where py >nul 2>&1
-if not errorlevel 1 goto repairpy
-where python >nul 2>&1
-if not errorlevel 1 goto repairpython
-echo   - no system python available to repair with
-goto syspy
-
-:repairpy
-py -3 -m venv "%ROOT%.venv"
-goto repairdone
-
-:repairpython
-python -m venv "%ROOT%.venv"
-goto repairdone
-
-:repairdone
-"%VENV%" -c "import sys" >nul 2>&1
-if not errorlevel 1 goto venvoke
-echo   - repair failed, falling back to system python
+echo   - bundled venv is not usable on this machine.
+echo     Common causes: the antivirus quarantined .venv\Scripts\python.exe,
+echo     or the zip was not extracted completely. Re-extract the zip or
+echo     whitelist the folder in your antivirus, then try again.
+echo   - falling back to the system python installation ...
 goto syspy
 
 :venvoke
@@ -72,6 +66,7 @@ echo   - using the bundled runtime in .venv
 goto deps
 
 :syspy
+set "PYTHONHOME="
 where py >nul 2>&1
 if not errorlevel 1 goto syspy1
 where python >nul 2>&1

@@ -38,6 +38,9 @@ if exist "%~dp0.venv" echo   [OK]   bundled runtime directory found: .venv
 if not exist "%~dp0.venv" echo   [WARN] no .venv - it will be created automatically on first start
 if exist "%~dp0.venv\Scripts\python.exe" echo   [OK]   found .venv\Scripts\python.exe
 if not exist "%~dp0.venv\Scripts\python.exe" echo   [WARN] missing .venv\Scripts\python.exe
+if exist "%~dp0.venv\Lib\os.py" (echo   [OK]   bundled stdlib found: .venv\Lib ^(portable^)) else echo   [WARN] missing .venv\Lib\os.py - bundled runtime is not self-contained
+if exist "%~dp0.venv\Scripts\python310.dll" (echo   [OK]   found .venv\Scripts\python310.dll) else echo   [WARN] missing .venv\Scripts\python310.dll - bundled runtime needs a system Python 3.10
+if exist "%~dp0.venv\DLLs\_sqlite3.pyd" (echo   [OK]   found .venv\DLLs\_sqlite3.pyd) else echo   [WARN] missing .venv\DLLs extensions
 if exist "%~dp0.venv\Scripts\python.exe" "%~dp0.venv\Scripts\python.exe" -c "import sys; print('         bundled python version: ' + sys.version.split()[0])"
 if exist "%~dp0.config.yaml" echo   [OK]   found config.yaml
 if not exist "%~dp0.config.yaml" echo   [WARN] missing config.yaml

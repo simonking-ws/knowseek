@@ -1,4 +1,4 @@
-#!E:\JAVA_WORKSPACE\idea-github-workspace\knowseek\.venv\Scripts\python.exe
+#!e:\JAVA_WORKSPACE\idea-github-workspace\knowseek\.venv\Scripts\python.exe
 """Extract pdf structure in XML format"""
 
 import logging

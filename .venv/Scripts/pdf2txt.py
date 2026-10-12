@@ -1,4 +1,4 @@
-#!E:\JAVA_WORKSPACE\idea-github-workspace\knowseek\.venv\Scripts\python.exe
+#!e:\JAVA_WORKSPACE\idea-github-workspace\knowseek\.venv\Scripts\python.exe
 """A command line tool for extracting text and images from PDF and
 output it to plain text, html, xml or tags.
 """
