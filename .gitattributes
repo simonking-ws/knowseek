@@ -1,0 +1,13 @@
+# 虚拟环境随仓库分发：一律不做换行符转换，避免 .exe/.dll/.pyd 等二进制被破坏
+.venv/** -text
+
+# 通用二进制类型
+*.pyd binary
+*.dll binary
+*.exe binary
+*.pdb binary
+*.zip binary
+*.whl binary
+*.png binary
+*.jpg binary
+*.ico binary

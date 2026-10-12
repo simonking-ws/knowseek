@@ -5,9 +5,9 @@ __pycache__/
 *.so
 
 # Virtual Environment
+# 注：.venv 随仓库分发（开箱即用），不在此忽略
 venv/
 ENV/
-.venv/
 
 # IDE
 .idea/
@@ -51,3 +51,11 @@ logs/
 # Test / temp scripts
 test_*.py
 _*.py
+
+# 例外：.venv 随仓库分发，上面规则会误伤其中的二进制扩展与下划线开头的模块文件
+!.venv/**/*.pyd
+!.venv/**/*.dll
+!.venv/**/*.exe
+!.venv/**/*.pdb
+!.venv/**/_*.py
+!.venv/**/test_*.py
