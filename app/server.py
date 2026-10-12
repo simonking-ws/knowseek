@@ -228,13 +228,18 @@ body{font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;backgroun
 .confirm-overlay.show{opacity:1;pointer-events:auto}
 .confirm-box{background:var(--card);border-radius:12px;padding:28px 32px;min-width:320px;max-width:440px;box-shadow:0 8px 32px rgba(0,0,0,.15);transform:scale(.9);transition:transform .2s}
 .confirm-overlay.show .confirm-box{transform:scale(1)}
-.confirm-box .confirm-msg{font-size:15px;color:var(--text-1);line-height:1.6;margin-bottom:24px;text-align:center}
+.confirm-box .confirm-msg{font-size:15px;color:var(--text-1);line-height:1.6;margin-bottom:24px;text-align:center;white-space:pre-line}
 .confirm-box .confirm-btns{display:flex;gap:12px;justify-content:center}
 .confirm-box .confirm-btn{padding:8px 24px;border-radius:8px;border:none;font-size:14px;cursor:pointer;transition:all .15s}
 .confirm-box .btn-cancel{background:#e8e8e8;color:var(--text-2)}
 .confirm-box .btn-cancel:hover{background:#ddd}
 .confirm-box .btn-ok{background:var(--primary);color:#fff}
 .confirm-box .btn-ok:hover{opacity:.9}
+.confirm-box .btn-ok.danger{background:#c62828}
+.confirm-box .confirm-extra{margin:-8px 0 20px;display:flex;flex-direction:column;gap:10px}
+.confirm-box .confirm-input{width:100%;box-sizing:border-box;padding:8px 12px;font-size:14px;border:1px solid var(--border);border-radius:8px;outline:none}
+.confirm-box .confirm-input:focus{border-color:#c62828}
+.confirm-box .confirm-check{display:flex;align-items:flex-start;gap:6px;font-size:12px;line-height:1.5;color:var(--text-2);cursor:pointer}
 
 .modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:9998;display:none;justify-content:center;align-items:center}
 .modal-overlay.show{display:flex !important}
@@ -306,6 +311,7 @@ body{font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;backgroun
       <button class="action-btn" onclick="syncIndex()">⚡ 同步索引</button>
       <button class="action-btn danger" onclick="batchRemove()" id="batch-remove-btn" style="display:none">🗑 批量移除 (<span id="sel-count">0</span>)</button>
       <span class="file-stats" id="file-stats"></span>
+      <button class="action-btn danger" onclick="clearAllDocs()" title="清空全部文档索引与知识图谱（不删除原文件）">🧹 清空文档</button>
     </div>
     <table class="file-table">
       <thead>
@@ -422,6 +428,12 @@ body{font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;backgroun
 <div class="confirm-overlay" id="confirm-overlay">
   <div class="confirm-box" id="confirm-box">
     <div class="confirm-msg" id="confirm-msg"></div>
+    <div class="confirm-extra" id="confirm-extra" style="display:none">
+      <input type="text" id="confirm-input" class="confirm-input" placeholder="">
+      <label class="confirm-check" id="confirm-check-wrap">
+        <input type="checkbox" id="confirm-checkbox"> <span id="confirm-check-label"></span>
+      </label>
+    </div>
     <div class="confirm-btns">
       <button class="confirm-btn btn-cancel" id="confirm-cancel-btn" onclick="resolveDialog(false)">取消</button>
       <button class="confirm-btn btn-ok" id="confirm-ok-btn" onclick="resolveDialog(true)">确定</button>
@@ -474,10 +486,19 @@ function showToast(msg, type='') {
 // ===== Confirm / Alert =====
 let _dialogResolve = null;
 let _dialogMode = 'confirm';
+let _dialogExpect = null;          // 非空：要求输入完全一致才允许确认
+function _resetDialogExtra() {
+  _dialogExpect = null;
+  document.getElementById('confirm-extra').style.display = 'none';
+  document.getElementById('confirm-input').value = '';
+  document.getElementById('confirm-checkbox').checked = false;
+  document.getElementById('confirm-ok-btn').classList.remove('danger');
+}
 function showConfirm(msg) {
   return new Promise(resolve => {
     _dialogResolve = resolve;
     _dialogMode = 'confirm';
+    _resetDialogExtra();
     document.getElementById('confirm-msg').textContent = msg;
     document.getElementById('confirm-cancel-btn').style.display = '';
     document.getElementById('confirm-ok-btn').textContent = '确定';
@@ -488,20 +509,69 @@ function showAlert(msg) {
   return new Promise(resolve => {
     _dialogResolve = resolve;
     _dialogMode = 'alert';
+    _resetDialogExtra();
     document.getElementById('confirm-msg').textContent = msg;
     document.getElementById('confirm-cancel-btn').style.display = 'none';
     document.getElementById('confirm-ok-btn').textContent = '知道了';
     document.getElementById('confirm-overlay').classList.add('show');
   });
 }
+// 危险操作确认：可要求输入指定文字（expect）+ 附带勾选项，返回 {ok, checked}
+function showDangerConfirm(msg, expect, checkLabel) {
+  return new Promise(resolve => {
+    _dialogResolve = resolve;
+    _dialogMode = 'danger';
+    _dialogExpect = expect || null;
+    document.getElementById('confirm-msg').innerHTML = msg;
+    document.getElementById('confirm-cancel-btn').style.display = '';
+
+    let input = document.getElementById('confirm-input');
+    let checkWrap = document.getElementById('confirm-check-wrap');
+    let okBtn = document.getElementById('confirm-ok-btn');
+    okBtn.textContent = expect ? '确认清空' : '确定';
+    okBtn.classList.add('danger');
+
+    if (expect) {
+      input.style.display = '';
+      input.value = '';
+      input.placeholder = `请输入「${expect}」以确认`;
+    } else {
+      input.style.display = 'none';
+      input.value = '';
+    }
+    if (checkLabel) {
+      checkWrap.style.display = '';
+      document.getElementById('confirm-check-label').textContent = checkLabel;
+      document.getElementById('confirm-checkbox').checked = false;
+    } else {
+      checkWrap.style.display = 'none';
+    }
+    document.getElementById('confirm-extra').style.display = (expect || checkLabel) ? '' : 'none';
+    document.getElementById('confirm-overlay').classList.add('show');
+    if (expect) setTimeout(() => input.focus(), 60);
+  });
+}
 function resolveDialog(ok) {
+  if (ok && _dialogMode === 'danger' && _dialogExpect) {
+    let v = (document.getElementById('confirm-input').value || '').trim();
+    if (v !== _dialogExpect) {
+      showToast(`请输入「${_dialogExpect}」以确认`, 'error');
+      return;                       // 输入不匹配：弹窗保持打开
+    }
+  }
+  let checked = document.getElementById('confirm-checkbox').checked;
   document.getElementById('confirm-overlay').classList.remove('show');
   if (_dialogResolve) {
     if (_dialogMode === 'alert') _dialogResolve();
+    else if (_dialogMode === 'danger') _dialogResolve({ok: !!ok, checked: checked});
     else _dialogResolve(ok);
     _dialogResolve = null;
   }
 }
+// 危险确认框里回车 = 确认
+document.getElementById('confirm-input').addEventListener('keydown', ev => {
+  if (ev.key === 'Enter') resolveDialog(true);
+});
 
 // ===== Dashboard =====
 async function loadDashboard() {
@@ -752,7 +822,7 @@ async function loadFiles(page) {
         <td class="col-chunks">${f.chunk_count}</td>
         <td class="col-time" title="${escJS(f.indexed_at||'')}">${esc(f.indexed_at||'')}</td>
         <td class="col-path file-path" title="${escJS(f.file_path)}">${esc(prettyPath(f.file_path))}</td>
-        <td class="col-action"><button class="remove-btn" onclick="event.stopPropagation();removeFile('${escJS(f.file_path)}')">移除</button></td>
+        <td class="col-action"><button class="remove-btn" onclick="event.stopPropagation();removeFile('${escJS(f.file_path)}')" title="仅清除索引与图谱，不删除磁盘原文件">移除</button></td>
       </tr>`;
     }).join('');
   }
@@ -794,7 +864,7 @@ function updateBatchBtn() {
 
 async function batchRemove() {
   if (!selectedFiles.size) return;
-  if (!await showConfirm(`确定移除 ${selectedFiles.size} 个文件的索引？`)) return;
+  if (!await showConfirm(`确定移除这 ${selectedFiles.size} 个文件的索引？\n（仅清除索引与图谱，磁盘上的原文件保留）`)) return;
   let resp = await fetch('/api/files/batch', {
     method: 'DELETE', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({file_paths: [...selectedFiles]})
@@ -805,11 +875,46 @@ async function batchRemove() {
 }
 
 async function removeFile(filePath) {
-  if (!await showConfirm('确定移除该文件的索引？')) return;
+  if (!await showConfirm('确定移除该文件的索引？\n（仅清除索引与图谱，磁盘上的原文件保留）')) return;
   let resp = await fetch('/api/files', {method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({file_path:filePath})});
   let data = await resp.json();
   if (data.ok) { showToast('已移除', 'success'); loadFiles(currentFilePage); showStats(); }
   else showToast('移除失败: '+(data.error||''), 'error');
+}
+
+// ===== 清空全部文档（二次确认，只清索引+图谱，不删磁盘原文件）=====
+async function clearAllDocs() {
+  let stats = (document.getElementById('file-stats').textContent || '').trim();
+
+  // 第一次确认：普通弹窗，说清范围
+  if (!await showConfirm(
+      '⚠️ 即将清空全部文档索引与整个知识图谱，此操作不可恢复。\n' +
+      (stats ? `当前：${stats}\n` : '') + '是否继续？')) return;
+
+  // 第二次确认：必须输入「清空」，并可选清空扫描目录
+  let r = await showDangerConfirm(
+    '二次确认：将删除<b>所有文档、片段、实体、关系与提及</b>。<br>' +
+    '<span style="color:#2e7d32">磁盘上的原文件不会被删除。</span><br>' +
+    '请输入「清空」二字后点击「确认清空」：',
+    '清空',
+    '同时清空 config.yaml 的 scan_dirs（否则下次「同步索引」会把这些目录重新索引回来）'
+  );
+  if (!r || !r.ok) return;
+
+  let resp = await fetch('/api/files/clear', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({confirm: 'CLEAR', clear_scan_dirs: !!r.checked})
+  });
+  let data = await resp.json();
+  if (!data.ok) { showToast('清空失败: ' + (data.error || ''), 'error'); return; }
+
+  showToast(
+    `已清空 ${data.removed_docs || 0} 篇文档与知识图谱` +
+    (data.cleared_scan_dirs ? '，scan_dirs 已一并清空' : ''), 'success');
+  selectedFiles.clear();
+  updateBatchBtn();
+  loadFiles(1);
+  showStats();
 }
 
 // ===== 上传 =====
@@ -1449,11 +1554,8 @@ def api_remove_file():
     file_path = data.get("file_path", "").strip()
     if not file_path:
         return jsonify({"error": "file_path 必填"}), 400
+    # 只清索引与图谱；磁盘原文件一律不动（知寻永不删除用户文件）
     indexer.remove_doc(file_path)
-    # 上传件只有索引没有原文件；其余按存在性删除
-    if not file_path.startswith(UPLOAD_PREFIX) and os.path.isfile(file_path):
-        try: os.remove(file_path)
-        except OSError: pass
     return jsonify({"ok": True, "file_path": file_path})
 
 
@@ -1465,12 +1567,26 @@ def api_batch_remove():
         return jsonify({"error": "file_paths 必填"}), 400
     removed = 0
     for p in paths:
+        # 只清索引与图谱；磁盘原文件一律不动
         indexer.remove_doc(p)
-        if not p.startswith(UPLOAD_PREFIX) and os.path.isfile(p):
-            try: os.remove(p)
-            except OSError: pass
         removed += 1
     return jsonify({"ok": True, "removed": removed})
+
+
+@app.route("/api/files/clear", methods=["POST"])
+def api_clear_all():
+    """清空全部文档索引 + 知识图谱（只清库，绝不删除磁盘原文件）
+
+    需带 confirm="CLEAR"；clear_scan_dirs=true 时顺带清空 config.yaml 的扫描目录，
+    避免下次「同步索引」又把清空的内容重新索引回来。
+    """
+    data = request.json or {}
+    if data.get("confirm") != "CLEAR":
+        return jsonify({"error": "缺少确认标记"}), 400
+    result = indexer.clear_all() or {}
+    result["ok"] = True
+    result["cleared_scan_dirs"] = _clear_scan_dirs_in_config() if data.get("clear_scan_dirs") else False
+    return jsonify(result)
 
 
 @app.route("/api/upload", methods=["POST"])
@@ -1674,6 +1790,54 @@ def _insert_scan_dir_line(text, dir_path):
     return "\n".join(lines) + "\n"
 
 
+def _clear_scan_dirs_in_config():
+    """保留注释地清空 config.yaml 里 scan_dirs 的列表项（只删 "- xxx" 行）"""
+    config["scan_dirs"] = []
+    if not os.path.exists(CONFIG_PATH):
+        return True
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError as e:
+        app.logger.warning("读取 config.yaml 失败: %s", e)
+        return False
+
+    idx = None
+    for i, ln in enumerate(lines):
+        if ln.split("#", 1)[0].strip().startswith("scan_dirs:"):
+            idx = i
+            break
+    if idx is None:
+        return True
+
+    end = idx
+    j = idx + 1
+    while j < len(lines):
+        s = lines[j].strip()
+        if s.startswith("- "):
+            end = j
+        elif s == "" or s.startswith("#"):
+            pass
+        else:
+            break
+        j += 1
+
+    kept = [ln for k, ln in enumerate(lines)
+            if not (idx < k <= end and ln.strip().startswith("- "))]
+
+    # 列表项已清空：把 scan_dirs 归一化成空列表，保留行尾注释
+    head, sep, tail = kept[idx].partition("#")
+    if head.strip() == "scan_dirs:" or "[" in head:
+        kept[idx] = "scan_dirs: []" + (("  " + sep + tail) if sep else "")
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            f.write("\n".join(kept) + "\n")
+    except OSError as e:
+        app.logger.warning("写入 config.yaml 失败: %s", e)
+        return False
+    return True
+
+
 def _persist_scan_dir(dir_path):
     """把索引过的目录写入 config.yaml 的 scan_dirs，后续「同步」会自动覆盖它"""
     dirs = _scan_dirs_from_config()
@@ -1709,8 +1873,6 @@ def _persist_scan_dir(dir_path):
                 yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
         except OSError as e:
             app.logger.warning("写入 config.yaml 失败: %s", e)
-    config["scan_dirs"] = dirs
-    return dirs
     config["scan_dirs"] = dirs
     return dirs
 

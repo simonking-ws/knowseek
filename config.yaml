@@ -2,9 +2,7 @@
 # ==============================
 
 # 文档扫描目录（支持多个目录，用逗号分隔或列表形式）
-scan_dirs:
-  - "C:\\Users\\shuai.wang\\Desktop"
-  - "E:\\专利"
+scan_dirs: []
 
 # 支持的文件扩展名
 extensions:

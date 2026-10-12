@@ -511,6 +511,19 @@ def prune_entities(min_doc=2, min_mention=3):
     return len(ids)
 
 
+def clear_all():
+    """清空图谱：实体 / 关系 / 提及 / 构建状态（不碰索引表）"""
+    init_tables()
+    conn = get_db()
+    conn.executescript(
+        "DELETE FROM kg_relations; DELETE FROM kg_mentions; "
+        "DELETE FROM kg_entities; DELETE FROM kg_state;"
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
 def rebuild_all():
     """全量重建：清空图谱表后按现有索引重建（不重新解析文件）"""
     init_tables()

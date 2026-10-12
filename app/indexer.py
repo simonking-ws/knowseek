@@ -165,6 +165,31 @@ def remove_doc(file_path):
             pass
 
 
+def clear_all():
+    """清空全部索引（documents / chunks_fts / meta）+ 图谱。
+
+    只清数据库，绝不删除磁盘上的原文件。返回被清掉的文档数。
+    """
+    conn = get_db()
+    total = conn.execute("SELECT COUNT(*) AS c FROM documents").fetchone()["c"]
+    conn.executescript(
+        "DELETE FROM chunks_fts; DELETE FROM documents; DELETE FROM meta;"
+    )
+    conn.commit()
+    try:
+        conn.execute("VACUUM")          # 回收 knowseek.db 体积
+    except Exception:
+        pass
+    conn.close()
+
+    try:
+        from . import kg
+        kg.clear_all()
+    except Exception:
+        pass
+    return {"removed_docs": total}
+
+
 def get_doc_list(page=1, per_page=20, source_type=None):
     """获取文档列表（分页）"""
     conn = get_db()
