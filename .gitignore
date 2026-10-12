@@ -21,8 +21,7 @@ data/*.db.bak*
 data/*.sqlite
 data/*.sqlite3
 
-# Local config —— 含个人扫描目录与 LLM api_key，不入库（用 config.example.yaml 代替）
-config.yaml
+# 本地私有配置（不入库）—— config.yaml 随仓库提供，个性化覆盖请放 config.local.yaml
 config.local.yaml
 
 # 实体别名表随仓库提供（通用缩写/别称词典，可自由修改）；含业务实体名的本地扩展请放 data/kg_alias.local.json

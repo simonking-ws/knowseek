@@ -1,6 +1,24 @@
 # 虚拟环境随仓库分发：一律不做换行符转换，避免 .exe/.dll/.pyd 等二进制被破坏
 .venv/** -text
 
+# ---------------------------------------------------------------------------
+# 【关键】Windows 脚本在仓库里必须以 CRLF 存储
+# GitHub 下载的 "Source code (zip)" 是 git archive，取的就是仓库里的字节。
+# 若 bat 以 LF 存库，Windows 的 cmd.exe 解析 goto / 代码块时会异常或直接静默失败，
+# 表现为「双击没反应 / 一闪而过」。只有这里显式声明 eol=crlf 才能影响 zip 产物。
+# ---------------------------------------------------------------------------
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 源码与文本资源统一 LF，避免跨平台 diff 噪音
+*.py text eol=lf
+*.md text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
+*.txt text eol=lf
+
 # 通用二进制类型
 *.pyd binary
 *.dll binary
@@ -11,3 +29,4 @@
 *.png binary
 *.jpg binary
 *.ico binary
+*.db binary

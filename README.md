@@ -101,16 +101,34 @@ knowseek/
 ├── config.yaml              # 配置文件
 ├── requirements.txt         # Python 依赖
 ├── run.py                   # 启动入口
-├── 启动知寻.bat             # Windows 一键启动
+├── 启动知寻.bat             # Windows 一键启动（自动选环境 + 自动装依赖）
 ├── 停止知寻.bat             # Windows 停止服务
-└── 重启知寻.bat             # Windows 重启服务
+├── 重启知寻.bat             # Windows 重启服务
+└── 修复环境.bat             # Windows 下载 zip 后的排错脚本（解锁 / 修换行 / 环境自检）
 ```
 
 ---
 
 ## 🚀 快速开始
 
-### 1. 安装依赖
+### 方式 A：Windows 双击即用（推荐，不用装 Python）
+
+仓库**自带完整的 `.venv` 运行环境**，所以下载解压后不需要 `pip install` 任何东西。
+
+三步，请严格按顺序做：
+
+1. 下载 zip 后，**先右键 zip → 属性 → 勾选「解除锁定」→ 确定**，再解压
+   （不解锁的话，Windows 会把里面的 `python.exe` 当外来程序拦截、杀软也可能直接隔离）
+2. 解压到**短路径**，推荐 `C:\knowseek\`
+   （`.venv\Lib\site-packages\...` 路径很深，长路径会被 Windows 260 字符限制截断而丢文件）
+3. 双击 `启动知寻.bat`，等浏览器自动打开 **http://127.0.0.1:9876**
+
+> **双击没反应 / 一闪而过？** 先双击一次 `修复环境.bat`（自动解锁 + 修复换行符 + 打印环境报告），再重试。
+> 仍然不行，看文末的 [排错章节](#排错windows-一键脚本)。
+
+### 方式 B：手动命令行（macOS / Linux / 想用自己的 Python）
+
+#### 1. 安装依赖
 
 ```bash
 pip install -r requirements.txt
@@ -118,7 +136,7 @@ pip install -r requirements.txt
 
 > 国内网络建议清华镜像：`pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple`
 
-### 2. 配置
+#### 2. 配置
 
 编辑 `config.yaml`：
 
@@ -150,7 +168,7 @@ kg:
   topk_edges: 10                      # 每个节点保留的共现边上限
 ```
 
-### 3. 启动
+#### 3. 启动
 
 ```bash
 python run.py
@@ -158,13 +176,35 @@ python run.py
 
 浏览器访问 **http://127.0.0.1:9876**
 
-Windows 也可双击 bat 脚本：
+---
+
+## 🪟 Windows 脚本说明
 
 | 脚本 | 用途 |
 |------|------|
-| `启动知寻.bat` | 后台启动（无窗口）+ 自动开浏览器；已在运行则只打开页面 |
-| `停止知寻.bat` | 终止占用 9876 端口的进程 |
+| `启动知寻.bat` | 自动挑环境 → 依赖自检 → 后台启动 + 开浏览器；已在运行则只打开页面 |
+| `停止知寻.bat` | 终止占用 9876 端口的进程；未运行时直接提示 |
 | `重启知寻.bat` | 先停止 → 等端口释放 → 再启动（改完代码/配置后用这个） |
+| `修复环境.bat` | **下载 zip 后双击无效的万能第一步**：解除文件锁定、修复 bat 换行符、打印环境报告 |
+
+`启动知寻.bat` 的环境选择策略（每一条失败都会有明确提示，不会静默退出）：
+
+```mermaid
+flowchart TD
+    A[双击启动] --> B{内置 .venv 解释器可用?}
+    B -- 是 --> D{依赖齐全?}
+    B -- 否 --> C[用系统 Python 重建 .venv 的 pyvenv.cfg]
+    C -- 修好了 --> D
+    C -- 修不好 --> E{系统有 py / python?}
+    E -- 无 --> Z[明确报错并暂停]
+    E -- 有 --> F{.venv 目录存在?}
+    F -- 否 --> G[自动 python -m venv + pip install 依赖]
+    F -- 是 --> D
+    D -- 缺依赖 --> G
+    D -- 齐全 --> H[后台启动 + 打开浏览器]
+    G --> H
+    H -- 25 秒未就绪 --> Y[打印日志末尾 + 暂停]
+```
 
 ---
 
@@ -336,3 +376,46 @@ Tab 顺序：**📊 仪表盘 › 🔍 搜索 › 🕸 知识图谱 › 📁 文
 
 - 搜索页的来源过滤器里预留了 **飞书 / 语雀 / Jenkins** 标签，但对应 Connector 尚未接入，当前实际数据源只有本地文件。
 - 图谱为自建实现（非 GraphRAG），**全程离线、不接入任何大模型**，也没有任何联网调用。
+
+---
+
+## 排错（Windows 一键脚本）
+
+> 双击 bat **没反应**时，先把 `启动知寻.bat` 拖到 cmd 窗口里回车运行（或在目录地址栏输入 `cmd` 回车后敲 `启动知寻.bat`），
+> 这样窗口不会自动关闭，能看到真实原因。更快的方式是直接双击 **`修复环境.bat`**。
+
+| 现象 | 原因 | 解决办法 |
+|------|------|----------|
+| 双击后窗口一闪而过 | 脚本末尾缺 `pause`，或 `.venv` 不存在导致 `start` 立刻失败 | 新版脚本已全部改成 `pause` 兜底；确认已拉取最新 bat |
+| 窗口里中文全是乱码 | bat 是 UTF-8，cmd 默认 GBK 代码页 | 新版脚本第一行就是 `chcp 65001`，正常不应再出现 |
+| 提示「No usable python runtime」 | zip 里没解压出 `.venv` | 重新解压到 `C:\knowseek\`；或改用方式 B 手动安装依赖 |
+| 提示 python.exe 找不到 DLL / 版本不对 | `.venv\pyvenv.cfg` 记录了**创建者机器上**的 Python 安装路径 | 脚本会自动尝试修复；修复失败会回落到系统 Python 重建 venv |
+| 卡在等待就绪，最后打印日志 | Flask 起不来，99% 是依赖缺失 | 看 `logs\knowseek.log` 末尾；或删掉 `.venv` 重来一次自动安装 |
+| 端口 9876 被占用 | 上一个实例没关干净 | 双击 `停止知寻.bat`，或改 `config.yaml` 里的 `port` |
+| 杀软报毒 / 自动删除文件 | `.venv` 里 30 个 `.exe` 被误判 | 恢复隔离文件；解压前对 zip 右键 → 属性 → **解除锁定** |
+| 提示路径太长 / 解压不完整 | Windows 260 字符路径限制 | 解压到短路径，如 `C:\knowseek\` |
+
+以上都排查不掉时，先看 `logs\knowseek.log`——后台服务的所有输出都在那里。
+
+---
+
+## 📦 发布须知（给维护者）
+
+`双击即用`依赖"把 `.venv` 原样提交进仓库"，推之前请确认三件事：
+
+```bash
+# 1) 确认 .venv 真的被 Git 跟踪了（应当有上万行输出）
+git ls-files | grep "^.venv/" | wc -l
+
+# 2) 若上面是 0 —— 强制把整个虚拟环境加入版本控制
+git add -f .venv
+
+# 3) 让新增的 *.bat text eol=crlf 规则生效到已入库文件（关键！否则 zip 里仍是 LF）
+git add --renormalize .
+git status
+```
+
+`.gitattributes` 里 `*.bat text eol=crlf` 决定 GitHub 导出 zip 时 bat 的换行符。
+**改完 `.gitattributes` 后必须跑一次 `git add --renormalize .`**，否则只在本地工作区里是 CRLF、仓库和 zip 里仍是 LF，cmd 会解析失败。
+
+发布后拿 `Source code (zip)` 自检一次：解压 → 看 bat 用记事本打开右下角是否显示 **CRLF** → 双击。
