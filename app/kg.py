@@ -557,7 +557,6 @@ def stats():
         "mention_count": mention_count,
         "by_type": by_type,
         "last_build": _get_state("last_build", "尚未构建"),
-        "llm_enabled": llm_enabled(),
     }
 
 
@@ -749,7 +748,7 @@ def graph(top=200, etype="", q="", types=None):
     return {"nodes": nodes, "edges": edges}
 
 
-# ==================== 期4：路径查询 / 导出 / LLM 谓词抽取 ====================
+# ==================== 路径查询 ====================
 
 def shortest_path(src_id, dst_id, max_depth=4):
     """无向 BFS 最短路径，返回路径上的节点与边"""
@@ -1029,95 +1028,4 @@ def entities_for_chunks(chunks, limit=12):
     return [{"id": r["id"], "name": r["name"], "type": r["type"], "count": r["c"]} for r in rows]
 
 
-# ---------- LLM 谓词抽取（可选，默认关闭）----------
 
-PREDICATE_VOCAB = ("depends_on", "belongs_to", "owner_of", "uses", "same_as")
-
-
-def llm_enabled():
-    cfg = (_cfg().get("kg") or {}).get("llm") or {}
-    return bool(cfg.get("enabled")) and bool(cfg.get("api_key"))
-
-
-def _llm_chat(prompt, cfg):
-    """调用 OpenAI 兼容接口（仅在 kg.llm.enabled 打开时才会被调用）"""
-    import urllib.request
-
-    base = (cfg.get("base_url") or "https://api.openai.com/v1").rstrip("/")
-    payload = {
-        "model": cfg.get("model") or "gpt-4o-mini",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0,
-    }
-    req = urllib.request.Request(
-        base + "/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json",
-                 "Authorization": "Bearer " + (cfg.get("api_key") or "")},
-    )
-    with urllib.request.urlopen(req, timeout=int(cfg.get("timeout", 30))) as resp:
-        body = json.loads(resp.read().decode("utf-8"))
-    return body["choices"][0]["message"]["content"]
-
-
-def llm_extract(limit=50):
-    """
-    用外部大模型给「共现实体对」打精确谓词（L2 关系）。
-    默认关闭（config.yaml: kg.llm.enabled: false），不开启时本函数不联网。
-    """
-    cfg = (_cfg().get("kg") or {}).get("llm") or {}
-    if not cfg.get("enabled"):
-        return {"ok": False, "added": 0, "error": "LLM 抽取未开启（kg.llm.enabled）"}
-    if not cfg.get("api_key"):
-        return {"ok": False, "added": 0, "error": "未配置 kg.llm.api_key"}
-
-    conn = get_db()
-    pairs = conn.execute(
-        "SELECT src_id, dst_id, weight FROM kg_relations "
-        "WHERE predicate = 'related_to' ORDER BY weight DESC LIMIT ?",
-        (max(1, limit),),
-    ).fetchall()
-
-    added, skipped = 0, 0
-    for p in pairs:
-        ev = conn.execute(
-            "SELECT m1.snippet FROM kg_mentions m1 "
-            "JOIN kg_mentions m2 ON m1.file_path = m2.file_path AND m1.para_index = m2.para_index "
-            "WHERE m1.entity_id = ? AND m2.entity_id = ? LIMIT 1",
-            (p["src_id"], p["dst_id"]),
-        ).fetchone()
-        if not ev or not ev["snippet"]:
-            skipped += 1
-            continue
-        a = conn.execute("SELECT name FROM kg_entities WHERE id = ?", (p["src_id"],)).fetchone()
-        b = conn.execute("SELECT name FROM kg_entities WHERE id = ?", (p["dst_id"],)).fetchone()
-        if not a or not b:
-            skipped += 1
-            continue
-
-        prompt = (
-            "你是知识图谱关系抽取器。根据片段判断两个实体的关系，"
-            "只能从以下选项中选一个：depends_on(依赖) / belongs_to(属于) / "
-            "owner_of(负责人) / uses(使用) / same_as(同义) / none(无关)。\n"
-            f"片段：{ev['snippet'][:300]}\n"
-            f"实体A：{a['name']}\n实体B：{b['name']}\n"
-            '只输出 JSON：{"predicate": "..."}'
-        )
-        try:
-            raw = _llm_chat(prompt, cfg)
-            m = re.search(r"\{[^}]*\}", raw or "")
-            pred = json.loads(m.group(0)).get("predicate") if m else None
-        except Exception as e:
-            conn.close()
-            return {"ok": False, "added": added, "skipped": skipped, "error": str(e)}
-
-        if not pred or pred == "none" or pred not in PREDICATE_VOCAB:
-            skipped += 1
-            continue
-        _add_relation(conn, p["src_id"], p["dst_id"], pred, 1.0,
-                      (ev["snippet"] or "")[:200], "llm")
-        added += 1
-
-    conn.commit()
-    conn.close()
-    return {"ok": True, "added": added, "skipped": skipped}

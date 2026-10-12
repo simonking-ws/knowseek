@@ -6,6 +6,7 @@ Flask Web 服务 - 搜索界面 + 索引管理 API
 import os
 import shutil
 import tempfile
+import threading
 import subprocess
 import sys
 import json
@@ -16,6 +17,7 @@ from .parser import parse_file, compute_file_hash
 import yaml
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.yaml")
+CONFIG_EXAMPLE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.example.yaml")
 
 def load_config():
     if os.path.exists(CONFIG_PATH):
@@ -128,6 +130,10 @@ body{font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;backgroun
 .file-table .file-title{font-weight:500;color:var(--primary);cursor:pointer}
 .file-table .remove-btn{color:#e53935;cursor:pointer;border:1px solid #ffcdd2;background:#fff;border-radius:4px;font-size:12px;padding:3px 10px;transition:all .2s}
 .file-table .remove-btn:hover{background:#e53935;color:#fff;border-color:#e53935}
+/* 进度条旁的「终止」按钮（上传 / 索引目录共用） */
+.cancel-btn{color:#e53935;cursor:pointer;border:1px solid #ffcdd2;background:#fff;border-radius:4px;font-size:12px;padding:3px 10px;transition:all .2s;white-space:nowrap}
+.cancel-btn:hover:not(:disabled){background:#e53935;color:#fff;border-color:#e53935}
+.cancel-btn:disabled{opacity:.6;cursor:default}
 .file-table tr.selected{background:#eef2ff}
 .file-table .col-cb input[type=checkbox]{cursor:pointer}
 
@@ -206,6 +212,9 @@ body{font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;backgroun
 .upload-progress-fill{background:var(--primary);height:100%;transition:width .3s}
 
 .empty{text-align:center;padding:48px 20px;color:#999}.empty .icon{font-size:40px;margin-bottom:10px}
+.site-footer{max-width:1200px;margin:0 auto;padding:14px 20px 28px;text-align:center;color:#8a94a6;font-size:12px;border-top:1px solid var(--border)}
+.site-footer a{color:var(--primary);text-decoration:none}
+.site-footer a:hover{text-decoration:underline}
 .actions-bar{display:flex;gap:8px;margin-bottom:16px;align-items:center}
 .file-stats{margin-left:auto;font-size:13px;color:var(--text-2);white-space:nowrap}
 .action-btn{padding:6px 14px;font-size:13px;border:1px solid var(--border);background:var(--card);border-radius:6px;cursor:pointer;color:var(--text-2)}
@@ -366,7 +375,6 @@ body{font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;backgroun
         </select>
         <button class="action-btn" onclick="loadKgView()">🔍 搜索</button>
         <button class="action-btn" onclick="applyKgAlias()">🔀 应用别名</button>
-        <button class="action-btn" id="kg-llm-btn" style="display:none" onclick="llmExtract()">✨ LLM 谓词</button>
         <button class="action-btn" onclick="rebuildKg()">🛠 重建图谱</button>
       </div>
       <div id="kg-stats" class="kg-stats"></div>
@@ -394,6 +402,10 @@ body{font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;backgroun
     </div>
   </div>
 
+</div>
+
+<div class="site-footer">
+  🐙 项目托管：<a href="https://github.com/simonking-ws/knowseek" target="_blank" rel="noopener">https://github.com/simonking-ws/knowseek</a>
 </div>
 
 <div class="modal-overlay" id="modal-overlay">
@@ -840,7 +852,7 @@ async function indexLocalDir() {
       return;
     }
 
-    localDirBtn.textContent = '⏳ 索引中(' + pv.count + ')';
+    localDirBtn.textContent = '⏳ 索引中...';
     showToast('发现 ' + pv.count + ' 个可索引文件，开始索引...');
     let resp = await fetch('/api/index_dir', {
       method: 'POST',
@@ -850,27 +862,84 @@ async function indexLocalDir() {
     let d = await resp.json();
     if (d.error) { showToast('索引失败: ' + d.error, 'error'); return; }
 
+    // 进度条：服务端后台线程索引，前端每 500ms 拉一次进度
     let results = document.getElementById('upload-results');
     results.innerHTML = '';
-    let div = document.createElement('div');
-    div.style.cssText = 'color:#2e7d32;padding:8px 4px;font-size:13px;line-height:1.6;word-break:break-all';
-    div.textContent = '✅ 已索引目录: ' + d.path + '（共 ' + d.total + ' 个文件：新增 ' + d.added + ' / 更新 ' + d.updated + ' / 未变更 ' + d.skipped + '）';
-    results.appendChild(div);
+    let progWrap = document.createElement('div');
+    progWrap.className = 'upload-progress';
+    progWrap.innerHTML = `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+        <div style="flex:1;font-size:13px;color:#666;word-break:break-all" id="dir-prog-text">准备索引 ${pv.count} 个文件...</div>
+        <button class="cancel-btn" id="dir-cancel-btn" onclick="cancelIndexDir()">⛔ 终止</button>
+      </div>
+      <div class="upload-progress-bar"><div class="upload-progress-fill" id="dir-prog-fill" style="width:0%"></div></div>`;
+    results.appendChild(progWrap);
 
-    if (d.errors && d.errors.length) {
-      let eDiv = document.createElement('div');
-      eDiv.style.cssText = 'color:#c62828;padding:8px 4px;font-size:13px;line-height:1.6;word-break:break-all';
-      eDiv.textContent = '⚠️ 部分文件解析失败: ' + d.errors.slice(0, 10).join('; ') + (d.errors.length > 10 ? ('（共 ' + d.errors.length + ' 条）') : '');
-      results.appendChild(eDiv);
-    }
-    showToast('索引完成: 新增 ' + d.added + ' | 更新 ' + d.updated + ' | 跳过 ' + d.skipped, 'success');
-    showStats();
+    await new Promise(resolve => {
+      let timer = setInterval(async () => {
+        let prog = await fetch('/api/index_progress').then(r => r.json());
+        let pct = prog.total ? Math.round(prog.done / prog.total * 100) : (prog.finished ? 100 : 0);
+        let fill = document.getElementById('dir-prog-fill');
+        let text = document.getElementById('dir-prog-text');
+        let cbtn = document.getElementById('dir-cancel-btn');
+        if (fill) fill.style.width = pct + '%';
+        if (text) {
+          text.textContent = (prog.cancelling ? '正在终止... ' : '索引中 ')
+            + `${prog.done}/${prog.total}（${pct}%）· 新增 ${prog.added} / 更新 ${prog.updated} / 未变更 ${prog.skipped}`
+            + (prog.current ? ` — ${prog.current}` : '');
+        }
+        if (cbtn && prog.cancelling) { cbtn.disabled = true; cbtn.textContent = '⏹ 终止中'; }
+        if (!prog.running) {
+          clearInterval(timer);
+          if (cbtn) cbtn.remove();
+          finishIndexDir(prog, results);
+          resolve();
+        }
+      }, 500);
+    });
   } catch (err) {
     showToast('索引失败: ' + err, 'error');
   } finally {
     localDirBtn.disabled = false;
     localDirBtn.textContent = '🚀 索引该目录';
   }
+}
+
+async function cancelIndexDir() {
+  let btn = document.getElementById('dir-cancel-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏹ 终止中'; }
+  let d = await fetch('/api/index_cancel', {method:'POST'}).then(r => r.json());
+  showToast(d.note || '已请求终止', 'error');
+}
+
+function finishIndexDir(d, results) {
+  results.innerHTML = '';
+  let div = document.createElement('div');
+  div.style.cssText = 'color:#2e7d32;padding:8px 4px;font-size:13px;line-height:1.6;word-break:break-all';
+  if (d.cancelled) {
+    div.style.color = '#ef6c00';
+    div.textContent = `⛔ 已终止索引: ${d.path || ''}（已处理 ${d.done}/${d.total}：新增 ${d.added} / 更新 ${d.updated} / 未变更 ${d.skipped}，已入库的会保留）`;
+  } else {
+    div.textContent = '✅ 已索引目录: ' + (d.path || '') + '（共 ' + d.total + ' 个文件：新增 ' + d.added + ' / 更新 ' + d.updated + ' / 未变更 ' + d.skipped + '）';
+  }
+  results.appendChild(div);
+
+  let dirTip = document.createElement('div');
+  dirTip.style.cssText = 'color:#666;padding:4px 4px 8px;font-size:12px;line-height:1.6;word-break:break-all';
+  dirTip.textContent = '📌 该目录已写入 config.yaml 的 scan_dirs，后续点「🔄 同步」会自动增量更新；列表/搜索结果里显示的就是文件在本机的真实路径，可直接「📁 在系统中打开」。';
+  results.appendChild(dirTip);
+
+  let errs = d.errors || [];
+  if (errs.length) {
+    let eDiv = document.createElement('div');
+    eDiv.style.cssText = 'color:#c62828;padding:8px 4px;font-size:13px;line-height:1.6;word-break:break-all';
+    eDiv.textContent = '⚠️ 部分文件解析失败: ' + errs.slice(0, 10).join('; ') + (errs.length > 10 ? ('（共 ' + errs.length + ' 条）') : '');
+    results.appendChild(eDiv);
+  }
+  showToast(d.cancelled
+    ? `已终止: 已处理 ${d.done}/${d.total}，新增 ${d.added} | 更新 ${d.updated} | 跳过 ${d.skipped}`
+    : `索引完成: 新增 ${d.added} | 更新 ${d.updated} | 跳过 ${d.skipped}`,
+    d.cancelled ? 'error' : 'success');
+  showStats();
 }
 
 async function handleFiles(fileList) {
@@ -895,7 +964,10 @@ async function handleFiles(fileList) {
   results.innerHTML = '';
   let progWrap = document.createElement('div');
   progWrap.className = 'upload-progress';
-  progWrap.innerHTML = `<div style="font-size:13px;color:#666;margin-bottom:6px" id="prog-text">上传中 0/${files.length}${summary}...</div>
+  progWrap.innerHTML = `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+      <div style="flex:1;font-size:13px;color:#666" id="prog-text">上传中 0/${files.length}${summary}...</div>
+      <button class="cancel-btn" id="upload-cancel-btn" onclick="cancelUpload()">⛔ 终止</button>
+    </div>
     <div class="upload-progress-bar"><div class="upload-progress-fill" id="prog-fill" style="width:0%"></div></div>`;
   results.appendChild(progWrap);
   let resultList = document.createElement('div');
@@ -904,28 +976,51 @@ async function handleFiles(fileList) {
 
   let progText = document.getElementById('prog-text');
   let progFill = document.getElementById('prog-fill');
+  let cancelBtn = document.getElementById('upload-cancel-btn');
 
-  let ok = 0, fail = 0, dup = 0;
+  uploadCancelled = false;
+  uploadAbort = null;
+  let ok = 0, fail = 0, dup = 0, done = 0;
   for (let i = 0; i < files.length; i++) {
+    if (uploadCancelled) break;
     let formData = new FormData();
     formData.append('file', files[i]);
     progText.textContent = `上传 ${i+1}/${files.length}${summary} (✅${ok} 🔄${dup} ❌${fail}) - ${files[i].name}`;
+    uploadAbort = new AbortController();
     try {
-      let resp = await fetch('/api/upload', {method:'POST', body: formData});
+      let resp = await fetch('/api/upload', {method:'POST', body: formData, signal: uploadAbort.signal});
       let data = await resp.json();
       if (data.error) { fail++; appendResult(resultList, '❌', files[i].name, data.error, '#c62828'); }
       else if (data.duplicate) { dup++; appendResult(resultList, '🔄', files[i].name, '已存在，跳过', '#1565c0'); }
       else { ok++; appendResult(resultList, '✅', files[i].name, data.indexed + ' 片段', '#2e7d32'); }
-    } catch(err) { fail++; appendResult(resultList, '❌', files[i].name, '上传失败', '#c62828'); }
-    let pct = Math.round((i+1)/files.length*100);
-    progFill.style.width = pct + '%';
-    progText.textContent = `上传 ${i+1}/${files.length}${summary} (✅${ok} 🔄${dup} ❌${fail})`;
+    } catch(err) {
+      if (uploadCancelled) break;                 // 用户主动终止：当前这个不再计入失败
+      fail++; appendResult(resultList, '❌', files[i].name, '上传失败', '#c62828');
+    }
+    done = i + 1;
+    progFill.style.width = Math.round(done / files.length * 100) + '%';
+    progText.textContent = `上传 ${done}/${files.length}${summary} (✅${ok} 🔄${dup} ❌${fail})`;
     await new Promise(r => setTimeout(r, 0));
   }
-  progText.textContent = `上传完成 ${files.length}/${files.length}${summary} (✅${ok} 🔄${dup} ❌${fail})`;
-  progFill.style.width = '100%';
-  showToast(`上传完成: ${ok} 新增, ${dup} 跳过, ${fail} 失败`, ok ? 'success' : 'error');
+  uploadAbort = null;
+  if (cancelBtn) cancelBtn.remove();
+  let tail = uploadCancelled ? `已终止 ${done}/${files.length}` : `上传完成 ${done}/${files.length}`;
+  progText.textContent = `${tail}${summary} (✅${ok} 🔄${dup} ❌${fail})`;
+  if (!uploadCancelled) progFill.style.width = '100%';
+  showToast(uploadCancelled
+    ? `已终止上传: 已完成 ${done}/${files.length}（${ok} 新增, ${dup} 跳过, ${fail} 失败）`
+    : `上传完成: ${ok} 新增, ${dup} 跳过, ${fail} 失败`, uploadCancelled ? 'error' : (ok ? 'success' : 'error'));
   showStats();
+}
+
+let uploadCancelled = false;    // 用户点了「终止」
+let uploadAbort = null;         // 当前上传请求的 AbortController
+function cancelUpload() {
+  uploadCancelled = true;
+  if (uploadAbort) uploadAbort.abort();
+  let btn = document.getElementById('upload-cancel-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏹ 终止中'; }
+  showToast('已请求终止，当前文件传完即停止', 'error');
 }
 
 function appendResult(container, icon, filename, status, color) {
@@ -949,8 +1044,7 @@ function appendResult(container, icon, filename, status, color) {
 // ===== 知识图谱 =====
 const KG_LABEL = {dir:'目录', file:'文档', section:'章节', person:'人物', system:'系统', term:'术语'};
 const KG_COLOR = {dir:'#8a94a6', file:'#4a6fa5', section:'#2e7d32', person:'#c62828', system:'#6b5bd2', term:'#ef6c00'};
-const KG_PRED = {contains:'包含', mentions:'提及', related_to:'共现',
-                 depends_on:'依赖', belongs_to:'属于', owner_of:'负责人', uses:'使用', same_as:'同义'};
+const KG_PRED = {contains:'包含', mentions:'提及', related_to:'共现'};
 const KG_PER_PAGE = 10;     // 实体列表每页条数，超过即分页
 let kgPage = 1;
 let kgView = 'list';         // 默认列表视图
@@ -1037,20 +1131,7 @@ function renderKgLegend(nodes) {
     + (KG_LABEL[k] || k) + ' ' + types[k] + '</span>').join('');
 }
 
-// ===== LLM 谓词 / 最短路径 =====
-async function llmExtract() {
-  showToast('正在调用 LLM 抽取谓词...');
-  try {
-    let d = await fetch('/api/kg/llm_extract', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({limit: 50})
-    }).then(r => r.json());
-    if (d.error) { showToast(d.error, 'error'); return; }
-    showToast('LLM 抽取完成：新增 ' + d.added + ' 条关系，跳过 ' + d.skipped + ' 条', 'success');
-    loadKgView();
-  } catch (e) { showToast('LLM 抽取失败: ' + e, 'error'); }
-}
-
+// ===== 最短路径 =====
 let kgPath = {from: null, to: null};
 
 function setKgPath(role, id, name) {
@@ -1189,8 +1270,6 @@ async function loadKgStats() {
     });
     chips.push(`<div class="kg-stat">构建 <b>${esc(d.last_build||'-')}</b></div>`);
     document.getElementById('kg-stats').innerHTML = chips.join('');
-    let llmBtn = document.getElementById('kg-llm-btn');
-    if (llmBtn) llmBtn.style.display = d.llm_enabled ? '' : 'none';
   } catch(e) { /* ignore */ }
 }
 
@@ -1293,7 +1372,12 @@ async function syncIndex() {
   showToast('正在同步...');
   let resp = await fetch('/api/sync', {method:'POST'});
   let data = await resp.json();
-  showToast(`新增 ${data.added} | 更新 ${data.updated} | 跳过 ${data.skipped} | 删除 ${data.removed}`, 'success');
+  let errs = data.errors || [];
+  if (errs.length) {
+    showToast(`新增 ${data.added} | 更新 ${data.updated} | 跳过 ${data.skipped} | 删除 ${data.removed} — ${errs[0]}`, 'error');
+  } else {
+    showToast(`新增 ${data.added} | 更新 ${data.updated} | 跳过 ${data.skipped} | 删除 ${data.removed}`, 'success');
+  }
   showStats();
 }
 
@@ -1506,8 +1590,23 @@ def api_open_file():
 
 @app.route("/api/sync", methods=["POST"])
 def api_sync():
-    dirs = config.get("scan_dirs", [])
     exts = config.get("extensions", list(SUPPORTED_EXTS))
+    configured = _scan_dirs_from_config()
+    dirs = [d for d in configured if os.path.isdir(d)]
+    missing = [d for d in configured if not os.path.isdir(d)]
+
+    if not dirs:
+        # 没有可用目录时绝不 prune：否则会把所有磁盘文档判成"已删除"
+        return jsonify({"added": 0, "updated": 0, "skipped": 0, "removed": 0,
+                        "errors": ["未配置有效的 scan_dirs（config.yaml），已跳过同步以免误删索引"]})
+
+    if missing:
+        # 部分目录不可达（如移动硬盘未接）时同样不清理，避免误删
+        added, updated, skipped, _, errors = sync.scan_and_index(dirs, exts, prune=False)
+        errors = list(errors) + [f"目录不可达，已跳过清理: {d}" for d in missing]
+        return jsonify({"added": added, "updated": updated, "skipped": skipped,
+                        "removed": 0, "errors": errors})
+
     added, updated, skipped, removed, errors = sync.scan_and_index(dirs, exts, prune=True)
     return jsonify({"added": added, "updated": updated, "skipped": skipped, "removed": removed, "errors": errors})
 
@@ -1537,9 +1636,120 @@ def api_scan_preview():
     return jsonify({"path": dir_path, "count": count, "total_size": total_size})
 
 
+def _scan_dirs_from_config():
+    dirs = config.get("scan_dirs") or []
+    if isinstance(dirs, str):
+        dirs = [d.strip() for d in dirs.split(",") if d.strip()]
+    return [str(d) for d in dirs if str(d).strip()]
+
+
+def _insert_scan_dir_line(text, dir_path):
+    """在保留注释的前提下把目录插进 config.yaml 的 scan_dirs 列表；无法定位则返回 None"""
+    lines = text.splitlines()
+    idx = None
+    for i, ln in enumerate(lines):
+        if ln.split("#", 1)[0].strip().startswith("scan_dirs:"):
+            idx = i
+            break
+    if idx is None:
+        return None
+
+    item = "  - " + json.dumps(dir_path, ensure_ascii=False)
+    last = idx
+    j = idx + 1
+    while j < len(lines):
+        s = lines[j].strip()
+        if s.startswith("- "):
+            last = j
+        elif s == "" or s.startswith("#"):
+            pass
+        else:
+            break
+        j += 1
+
+    if last == idx:
+        lines[idx] = "scan_dirs:\n" + item      # 原为空列表/单行写法
+    else:
+        lines.insert(last + 1, item)
+    return "\n".join(lines) + "\n"
+
+
+def _persist_scan_dir(dir_path):
+    """把索引过的目录写入 config.yaml 的 scan_dirs，后续「同步」会自动覆盖它"""
+    dirs = _scan_dirs_from_config()
+    key = os.path.normcase(os.path.abspath(dir_path))
+    if any(os.path.normcase(os.path.abspath(d)) == key for d in dirs):
+        return dirs                              # 已配置过，不重复写文件
+    dirs.append(dir_path)
+
+    written = False
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                text = f.read()
+            new_text = _insert_scan_dir_line(text, dir_path)
+            if new_text:
+                with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                    f.write(new_text)
+                written = True
+        except OSError as e:
+            app.logger.warning("更新 config.yaml 失败: %s", e)
+
+    if not written:                              # 无 config.yaml 或没有 scan_dirs 键：按模板生成
+        cfg = {}
+        if os.path.exists(CONFIG_EXAMPLE_PATH):
+            try:
+                with open(CONFIG_EXAMPLE_PATH, "r", encoding="utf-8") as f:
+                    cfg = yaml.safe_load(f) or {}
+            except Exception:
+                cfg = {}
+        cfg["scan_dirs"] = dirs
+        try:
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
+        except OSError as e:
+            app.logger.warning("写入 config.yaml 失败: %s", e)
+    config["scan_dirs"] = dirs
+    return dirs
+    config["scan_dirs"] = dirs
+    return dirs
+
+
+# 目录索引进度：后台线程写入，前端轮询 /api/index_progress 展示进度条
+_INDEX_LOCK = threading.Lock()
+_INDEX_CANCEL = threading.Event()          # 前端点「终止」时置位
+_INDEX_PROGRESS = {"running": False, "finished": False, "cancelled": False, "path": "",
+                   "done": 0, "total": 0, "current": "",
+                   "added": 0, "updated": 0, "skipped": 0, "errors": []}
+
+
+def _index_dir_worker(dir_path, exts):
+    def on_progress(done, total, current):
+        with _INDEX_LOCK:
+            _INDEX_PROGRESS.update({"done": done, "total": total, "current": current})
+        return not _INDEX_CANCEL.is_set()   # 返回 False → sync 立即停止
+
+    try:
+        # prune=False：只增量索引该目录，不影响 uploads / 其它 scan_dirs 的索引
+        added, updated, skipped, _, errors = sync.scan_and_index(
+            [dir_path], exts, prune=False, progress_cb=on_progress)
+        with _INDEX_LOCK:
+            _INDEX_PROGRESS.update({"added": added, "updated": updated, "skipped": skipped,
+                                    "errors": list(errors), "finished": True,
+                                    "cancelled": _INDEX_CANCEL.is_set()})
+    except Exception as e:
+        with _INDEX_LOCK:
+            _INDEX_PROGRESS.update({"errors": [str(e)], "finished": True,
+                                    "cancelled": _INDEX_CANCEL.is_set()})
+    finally:
+        with _INDEX_LOCK:
+            _INDEX_PROGRESS["running"] = False
+            _INDEX_PROGRESS["current"] = ""
+
+
 @app.route("/api/index_dir", methods=["POST"])
 def api_index_dir():
-    """索引本机目录：服务端直接扫描，不经浏览器上传（避免目录上传确认弹窗）"""
+    """索引本机目录：服务端直接扫描（不经浏览器上传）；后台线程执行，进度走 /api/index_progress"""
     data = request.json or {}
     dir_path = (data.get("path") or "").strip().strip('"').strip("'")
     if not dir_path:
@@ -1547,14 +1757,39 @@ def api_index_dir():
     if not os.path.isdir(dir_path):
         return jsonify({"error": f"目录不存在: {dir_path}"}), 400
 
+    with _INDEX_LOCK:
+        if _INDEX_PROGRESS["running"]:
+            return jsonify({"error": "已有索引任务在进行中，请等它跑完或先点「终止」"}), 409
+        _INDEX_PROGRESS.update({"running": True, "finished": False, "cancelled": False,
+                                "path": dir_path, "done": 0, "total": 0, "current": "",
+                                "added": 0, "updated": 0, "skipped": 0, "errors": []})
+    _INDEX_CANCEL.clear()
+
     exts = config.get("extensions", list(SUPPORTED_EXTS))
-    # prune=False：只增量索引该目录，不影响 uploads / 其它 scan_dirs 的索引
-    added, updated, skipped, removed, errors = sync.scan_and_index([dir_path], exts, prune=False)
-    return jsonify({
-        "added": added, "updated": updated, "skipped": skipped,
-        "removed": removed, "errors": errors, "path": dir_path,
-        "total": added + updated + skipped,
-    })
+    scan_dirs = _persist_scan_dir(dir_path)
+    threading.Thread(target=_index_dir_worker, args=(dir_path, exts), daemon=True).start()
+    return jsonify({"started": True, "path": dir_path, "scan_dirs": scan_dirs})
+
+
+@app.route("/api/index_progress")
+def api_index_progress():
+    """目录索引进度（done/total/current + 计数 + 错误 + 是否已终止）"""
+    with _INDEX_LOCK:
+        snap = dict(_INDEX_PROGRESS)
+        snap["errors"] = list(snap.get("errors") or [])
+    snap["cancelling"] = snap["running"] and _INDEX_CANCEL.is_set()
+    return jsonify(snap)
+
+
+@app.route("/api/index_cancel", methods=["POST"])
+def api_index_cancel():
+    """终止正在进行的目录索引：已入库的文件保留，未处理的文件不再继续"""
+    with _INDEX_LOCK:
+        running = _INDEX_PROGRESS["running"]
+    if not running:
+        return jsonify({"ok": True, "running": False, "note": "当前没有正在进行的索引任务"})
+    _INDEX_CANCEL.set()
+    return jsonify({"ok": True, "running": True, "note": "已请求终止，正在收尾"})
 
 
 # ==================== 知识图谱 API（L0 结构图谱） ====================
@@ -1645,18 +1880,6 @@ def api_kg_apply_alias():
     if result.get("merged"):
         kg_stats = kg.stats()
         result["entities"] = kg_stats["entity_count"]
-    return jsonify(result)
-
-
-@app.route("/api/kg/llm_extract", methods=["POST"])
-def api_kg_llm_extract():
-    """可选：LLM 谓词抽取（config.yaml kg.llm.enabled 打开才可用）"""
-    if not kg.llm_enabled():
-        return jsonify({"error": "LLM 抽取未开启，请在 config.yaml 打开 kg.llm.enabled 并配置 api_key"}), 400
-    limit = max(1, min((request.json or {}).get("limit", 50), 500))
-    result = kg.llm_extract(limit=limit)
-    if not result.get("ok"):
-        return jsonify(result), 500
     return jsonify(result)
 
 

@@ -4,6 +4,7 @@
 # 文档扫描目录（支持多个目录，用逗号分隔或列表形式）
 scan_dirs:
   - "C:\\Users\\shuai.wang\\Desktop"
+  - "E:\\专利"
 
 # 支持的文件扩展名
 extensions:
@@ -39,12 +40,3 @@ kg:
   min_mention: 3
   # 每个节点保留的共现边上限（防止边爆炸）
   topk_edges: 10
-
-  # L2 关系抽取（可选）：给共现实体对打精确谓词
-  # 默认关闭——开启后会调用外部大模型，不再"纯离线、不依赖大模型"
-  llm:
-    enabled: false
-    base_url: "https://api.openai.com/v1"   # 也支持任何 OpenAI 兼容接口（如本地 Ollama / vLLM）
-    api_key: ""
-    model: "gpt-4o-mini"
-    timeout: 30
