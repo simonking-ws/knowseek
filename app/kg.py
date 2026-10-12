@@ -24,6 +24,7 @@ except ImportError:  # 分词不可用时自动退化为纯结构图谱
     jieba = None
     pseg = None
 
+from . import runtime
 from .indexer import get_db
 
 # 每个实体最多保留的提及条数（控制表体积）
@@ -57,8 +58,8 @@ _USER_DICT_LOADED = False
 USER_TERMS = {}
 _STOPWORDS_LOADED = False
 
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CONFIG_PATH = os.path.join(ROOT_DIR, "config.yaml")
+ROOT_DIR = runtime.BASE_DIR
+CONFIG_PATH = runtime.CONFIG_PATH
 
 
 def _cfg():
@@ -656,42 +657,6 @@ def entity_detail(entity_id):
     }
     conn.close()
     return result
-
-
-def neighbors(entity_id, depth=1, limit=60):
-    """BFS 取邻居子图（双向遍历），返回 nodes + edges"""
-    init_tables()
-    conn = get_db()
-    visited = {int(entity_id)}
-    frontier = {int(entity_id)}
-    edges = []
-    for _ in range(max(1, min(depth, 3))):
-        if not frontier or len(visited) > limit:
-            break
-        q = ",".join("?" * len(frontier))
-        rows = conn.execute(
-            f"SELECT src_id, dst_id, predicate, weight FROM kg_relations "
-            f"WHERE src_id IN ({q}) OR dst_id IN ({q})",
-            list(frontier) + list(frontier),
-        ).fetchall()
-        nxt = set()
-        for r in rows:
-            key = (r["src_id"], r["dst_id"], r["predicate"])
-            edges.append({"source": r["src_id"], "target": r["dst_id"],
-                          "predicate": r["predicate"], "weight": r["weight"]})
-            for nid in (r["src_id"], r["dst_id"]):
-                if nid not in visited:
-                    nxt.add(nid)
-        visited |= nxt
-        frontier = nxt
-
-    ids = list(visited)[:limit]
-    q = ",".join("?" * len(ids))
-    rows = conn.execute(
-        f"SELECT id, name, type, mention_count FROM kg_entities WHERE id IN ({q})", ids
-    ).fetchall()
-    conn.close()
-    return {"nodes": [dict(r) for r in rows], "edges": edges}
 
 
 def graph(top=200, etype="", q="", types=None):

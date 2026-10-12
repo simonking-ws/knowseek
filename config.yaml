@@ -1,7 +1,7 @@
 # 知寻 KnowSeek - 本地知识库全文检索配置
 # ==============================
 
-# 支持的文件扩展名（.doc 走 Word COM 解析，仅 Windows；.xls 与 .xlsx 用同一解析器）
+# 支持的文件扩展名（.doc 走 Word COM 解析，仅 Windows；.xlsx 用 openpyxl，.xls 用 xlrd）
 extensions:
   - ".docx"
   - ".doc"
@@ -11,10 +11,7 @@ extensions:
   - ".xlsx"
   - ".xls"
 
-# 增量同步间隔（秒）
-sync_interval: 300
-
-# 搜索结果默认返回条数
+# 搜索结果 / 文件列表每页条数上限（前端默认每页 10 条）
 max_results: 50
 
 # Flask 服务端口

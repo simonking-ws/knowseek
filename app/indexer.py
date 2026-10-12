@@ -13,20 +13,29 @@ import json
 import html
 import jieba
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "knowseek.db")
+from .runtime import DATA_DIR
+
+DB_PATH = os.path.join(DATA_DIR, "knowseek.db")
 
 
 def get_db():
-    """获取数据库连接"""
+    """获取数据库连接（写锁最多等待 30s，避免并发索引时直接报 locked）"""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA synchronous = NORMAL")
     return conn
 
 
 def init_db():
     """初始化数据库表结构"""
     conn = get_db()
+    # WAL：索引写入时搜索仍可正常读；不支持 WAL 的文件系统会自动保持原 journal 模式
+    try:
+        conn.execute("PRAGMA journal_mode = WAL")
+    except sqlite3.OperationalError:
+        pass
     conn.executescript("""
         -- 文档元数据表
         CREATE TABLE IF NOT EXISTS documents (
@@ -79,6 +88,18 @@ def tokenize(text):
     return " ".join(t for t in tokens if t.strip())
 
 
+def get_doc_hash(file_path):
+    """读取已索引文件的 MD5；未索引返回 None（连接即用即关）"""
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT file_hash FROM documents WHERE file_path = ?", (file_path,)
+        ).fetchone()
+        return row["file_hash"] if row else None
+    finally:
+        conn.close()
+
+
 def index_chunks(chunks):
     """将一批 chunk 写入索引"""
     conn = get_db()
@@ -88,7 +109,7 @@ def index_chunks(chunks):
         return 0
 
     file_path = chunks[0]["file_path"]
-    file_hash = chunks[chunks[0].get("file_hash_index", 0)]["file_hash"] if "file_hash_index" in chunks[0] else chunks[0]["file_hash"]
+    file_hash = chunks[0]["file_hash"]
     source_type = chunks[0].get("source_type", "word")
     title = chunks[0].get("title", "")
 
@@ -143,6 +164,38 @@ def index_chunks(chunks):
         pass
 
     return count
+
+
+def empty_doc(file_path, file_hash=None):
+    """文件解析不到任何文本时：清掉旧片段与图谱，保留文档记录并更新 hash。
+
+    避免文件内容被清空后，旧片段仍能被搜索到。
+    """
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT id FROM documents WHERE file_path = ?", (file_path,)
+        ).fetchone()
+        if not row:
+            return 0
+        conn.execute("DELETE FROM chunks_fts WHERE doc_id = ?", (row["id"],))
+        if file_hash:
+            conn.execute(
+                "UPDATE documents SET file_hash = ?, indexed_at = datetime('now', 'localtime') "
+                "WHERE id = ?",
+                (file_hash, row["id"]),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # 同步清理该文档在图谱中的节点、提及与关系
+    try:
+        from . import kg
+        kg.remove_file(file_path)
+    except Exception:
+        pass
+    return 1
 
 
 def remove_doc(file_path):

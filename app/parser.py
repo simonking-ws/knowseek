@@ -149,6 +149,65 @@ def parse_pdf(file_path):
     return chunks
 
 
+def _xls_cell_text(book, cell):
+    """把 xlrd 单元格转成文本（日期/布尔/错误值单独处理）"""
+    import xlrd
+
+    if cell.ctype == xlrd.XL_CELL_DATE:
+        try:
+            value = xlrd.xldate.xldate_as_datetime(cell.value, book.datemode)
+            return value.strftime("%Y-%m-%d %H:%M:%S").replace(" 00:00:00", "")
+        except Exception:
+            return str(cell.value)
+    if cell.ctype == xlrd.XL_CELL_BOOLEAN:
+        return "TRUE" if cell.value else "FALSE"
+    if cell.ctype == xlrd.XL_CELL_ERROR:
+        return xlrd.error_text_from_code.get(cell.value, "")
+    if cell.ctype in (xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK):
+        return ""
+    value = cell.value
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    return str(value).strip()
+
+
+def parse_xls(file_path):
+    """解析 Excel 97-2003 (.xls)，按 sheet 和行切块（xlrd）"""
+    try:
+        import xlrd
+    except ImportError as e:
+        raise RuntimeError("解析 .xls 需要 xlrd，请先执行 pip install xlrd") from e
+
+    file_hash = compute_file_hash(file_path)
+    chunks = []
+    title = os.path.basename(file_path)
+
+    book = xlrd.open_workbook(file_path, on_demand=True)
+    try:
+        for sheet_name in book.sheet_names():
+            sheet = book.sheet_by_name(sheet_name)
+            for row_idx in range(sheet.nrows):
+                cells = [_xls_cell_text(book, cell) for cell in sheet.row(row_idx)]
+                cells = [c for c in cells if c]
+                if not cells:
+                    continue
+                row_text = " | ".join(cells)
+                if len(row_text.strip()) < 2:
+                    continue
+                chunks.append({
+                    "content": row_text,
+                    "file_path": os.path.abspath(file_path),
+                    "file_hash": file_hash,
+                    "source_type": "excel",
+                    "title": title,
+                    "section_path": f"Sheet: {sheet_name}",
+                    "para_index": row_idx,
+                })
+    finally:
+        book.release_resources()
+    return chunks
+
+
 def parse_excel(file_path):
     """解析 Excel 文档，按 sheet 和行切块"""
     import openpyxl
@@ -258,8 +317,10 @@ def parse_file(file_path):
         return _parse_doc_via_com(file_path)
     elif ext == ".pdf":
         return parse_pdf(file_path)
-    elif ext in (".xlsx", ".xls"):
+    elif ext == ".xlsx":
         return parse_excel(file_path)
+    elif ext == ".xls":
+        return parse_xls(file_path)
     elif ext in (".txt", ".md"):
         return parse_text(file_path)
     else:

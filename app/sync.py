@@ -4,7 +4,6 @@
 """
 
 import os
-import time
 from . import indexer
 from .parser import parse_file, compute_file_hash
 
@@ -77,12 +76,9 @@ def scan_and_index(directories, extensions=None, prune=True, progress_cb=None, r
             break
         try:
             file_hash = compute_file_hash(fpath)
-            existing = indexer.get_db().execute(
-                "SELECT file_hash FROM documents WHERE file_path = ?",
-                (fpath,),
-            ).fetchone()
+            existing_hash = indexer.get_doc_hash(fpath)
 
-            if existing and existing["file_hash"] == file_hash:
+            if existing_hash == file_hash:
                 skipped += 1
                 emit(fpath, "skipped", "未变更，跳过")
                 continue
@@ -90,12 +86,16 @@ def scan_and_index(directories, extensions=None, prune=True, progress_cb=None, r
             chunks = parse_file(fpath)
             if chunks:
                 count = indexer.index_chunks(chunks)
-                if existing:
+                if existing_hash is not None:
                     updated += count
                     emit(fpath, "updated", f"更新 {count} 片段")
                 else:
                     added += count
                     emit(fpath, "added", f"新增 {count} 片段")
+            elif existing_hash is not None:
+                # 文件还在但已无文本：清掉旧片段，避免搜索到过期内容
+                indexer.empty_doc(fpath, file_hash)
+                emit(fpath, "updated", "无可索引内容，已清空旧片段")
             else:
                 emit(fpath, "skipped", "无可索引内容，跳过")
         except Exception as e:

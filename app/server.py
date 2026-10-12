@@ -7,14 +7,12 @@ import os
 import threading
 import subprocess
 import sys
-import json
-from flask import Flask, request, jsonify, render_template_string, send_file, make_response
-from . import indexer, sync, kg
-from .parser import compute_file_hash
+from flask import Flask, request, jsonify, render_template_string, make_response
+from . import indexer, sync, kg, runtime
 
 import yaml
 
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.yaml")
+CONFIG_PATH = runtime.CONFIG_PATH
 
 def load_config():
     if os.path.exists(CONFIG_PATH):
@@ -24,8 +22,7 @@ def load_config():
 
 config = load_config()
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-STATIC_DIR = os.path.join(PROJECT_ROOT, "static")
+STATIC_DIR = runtime.resource_path("static")
 os.makedirs(STATIC_DIR, exist_ok=True)
 # 静态资源指向项目根 static/（离线内置 ECharts，不走 CDN）
 app = Flask(__name__, static_folder=STATIC_DIR, static_url_path="/static")
@@ -94,8 +91,8 @@ body{font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;backgroun
 .source-tag.text{background:#fff3e0;color:#e65100}
 .source-tag.pdf{background:#fce4ec;color:#c62828}
 .source-tag.excel{background:#e8f5e9;color:#2e7d32}
-.result-meta .file-path{color:#999;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1 1 auto}
-.result-meta > span:not(.file-path),.result-meta > strong{flex:none;white-space:nowrap}
+.result-meta .path-copy{color:#999;font-size:12px;min-width:0;flex:1 1 auto;width:auto}
+.result-meta > span:not(.path-copy),.result-meta > strong{flex:none;white-space:nowrap}
 .result-content{font-size:14px;line-height:1.7;color:#333;background:#fafbfc;border-radius:6px;padding:10px 14px;border-left:3px solid var(--primary);white-space:pre-wrap;word-break:break-word;max-height:200px;overflow-y:auto}
 .result-content mark{background:var(--mark);padding:1px 3px;border-radius:2px;font-weight:500}
 .result-score{font-size:11px;color:#bbb;white-space:nowrap}
@@ -125,6 +122,18 @@ body{font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;backgroun
 .file-table .file-title{font-weight:500;color:var(--primary);cursor:pointer}
 .file-table .remove-btn{color:#e53935;cursor:pointer;border:1px solid #ffcdd2;background:#fff;border-radius:4px;font-size:12px;padding:3px 10px;transition:all .2s}
 .file-table .remove-btn:hover{background:#e53935;color:#fff;border-color:#e53935}
+.path-copy{display:flex;align-items:center;gap:4px;min-width:0;width:100%}
+.path-copy .path-marquee{flex:1 1 auto;min-width:0;width:auto}
+.path-marquee{display:block;width:100%;overflow:hidden;white-space:nowrap;cursor:default}
+.path-marquee .path-short{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.path-marquee .path-full{position:relative;left:0;display:none;white-space:nowrap;-webkit-font-smoothing:antialiased}
+.path-marquee.show-full .path-short{display:none}
+.path-marquee.show-full .path-full{display:inline-block}
+.path-marquee .path-full.running{animation:path-marquee var(--path-duration,6s) linear infinite alternate}
+.copy-path-btn{flex:none;border:0;background:transparent;color:#9aa0a6;cursor:pointer;font-size:13px;line-height:1;padding:2px 3px;border-radius:3px;opacity:.55;transition:opacity .15s,background .15s,color .15s}
+.copy-path-btn:hover{opacity:1;background:#eef1f5;color:var(--primary)}
+.copy-path-btn.copied{opacity:1;color:#2e7d32}
+@keyframes path-marquee{from{left:0}to{left:var(--path-shift,0)}}
 /* 进度条旁的「终止」按钮（索引文件 / 目录） */
 .cancel-btn{color:#e53935;cursor:pointer;border:1px solid #ffcdd2;background:#fff;border-radius:4px;font-size:12px;padding:3px 10px;transition:all .2s;white-space:nowrap}
 .cancel-btn:hover:not(:disabled){background:#e53935;color:#fff;border-color:#e53935}
@@ -441,11 +450,81 @@ function prettyPath(p) {
   return s.startsWith(UPLOAD_PREFIX) ? '☁ ' + s.slice(UPLOAD_PREFIX.length) : s;
 }
 
-// 结果卡片底部的路径：超长时截成「…尾部」，保证一行不换行；完整路径放在 title 里悬浮可见
-const MAX_PATH_LEN = 46;
-function shortPath(p) {
+const FILE_PATH_LEN = 34;
+function middlePath(p, maxLen = FILE_PATH_LEN) {
   let s = prettyPath(p);
-  return s.length > MAX_PATH_LEN ? '…' + s.slice(-(MAX_PATH_LEN - 1)) : s;
+  if (s.length <= maxLen) return s;
+  const keep = maxLen - 3;
+  const head = Math.ceil(keep * 0.42);
+  const tail = keep - head;
+  return s.slice(0, head) + '...' + s.slice(-tail);
+}
+
+function filePathCell(p) {
+  const raw = p || '';
+  const full = prettyPath(raw);
+  const short = middlePath(full);
+  const copyBtn = `<button type="button" class="copy-path-btn" data-path="${esc(raw)}" onclick="event.stopPropagation(); copyPath(this.dataset.path, this)" title="复制完整路径" aria-label="复制完整路径">📋</button>`;
+  const body = short === full
+    ? `<span class="path-marquee"><span class="path-short">${esc(full)}</span></span>`
+    : `<span class="path-marquee" aria-label="${esc(full)}" onmouseenter="startPathMarquee(this)" onmouseleave="stopPathMarquee(this)"><span class="path-short">${esc(short)}</span><span class="path-full">${esc(full)}</span></span>`;
+  return `<span class="path-copy">${body}${copyBtn}</span>`;
+}
+
+function startPathMarquee(el) {
+  el.classList.add('show-full');
+  const full = el.querySelector('.path-full');
+  if (!full) return;
+  const distance = Math.max(0, full.scrollWidth - el.clientWidth);
+  full.style.setProperty('--path-shift', `-${distance}px`);
+  full.style.setProperty('--path-duration', `${Math.max(4, distance / 35).toFixed(1)}s`);
+  if (!distance) return;
+  full.classList.remove('running');
+  void full.offsetWidth;
+  full.classList.add('running');
+}
+
+function stopPathMarquee(el) {
+  el.classList.remove('show-full');
+  const full = el.querySelector('.path-full');
+  if (full) full.classList.remove('running');
+}
+
+async function copyPath(path, btn) {
+  if (!path) return;
+  let ok = false;
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(path);
+      ok = true;
+    }
+  } catch (e) {}
+  if (!ok) {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = path;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      ok = document.execCommand('copy');
+      ta.remove();
+    } catch (e) {}
+  }
+  if (!ok) {
+    showToast('复制失败，请手动选择路径', 'error');
+    return;
+  }
+  showToast('路径已复制', 'success');
+  if (btn) {
+    const old = btn.textContent;
+    btn.textContent = '✓';
+    btn.classList.add('copied');
+    setTimeout(() => {
+      btn.textContent = old;
+      btn.classList.remove('copied');
+    }, 1200);
+  }
 }
 
 // ===== Tab 切换 =====
@@ -707,7 +786,7 @@ function renderResults(results, kw, entities) {
       </div>
       <div class="result-content">${r.highlighted}</div>
       <div class="result-meta" style="margin-top:6px">
-        <span class="file-path" title="${esc(prettyPath(r.file_path))}">${esc(shortPath(r.file_path))}</span>
+        ${filePathCell(r.file_path)}
         <span>·</span><span style="white-space:nowrap">${esc(loc)}</span>
         <span class="result-score">BM25: ${r.score}</span>
         <span class="kg-link" title="在知识图谱中查看该文档" onclick="event.stopPropagation();focusInKg('${escJS(r.file_path)}')">🕸 图谱</span>
@@ -810,7 +889,7 @@ async function loadFiles(page) {
         <td class="col-source"><span class="source-tag ${sc}">${label}</span></td>
         <td class="col-chunks">${f.chunk_count}</td>
         <td class="col-time" title="${escJS(f.indexed_at||'')}">${esc(f.indexed_at||'')}</td>
-        <td class="col-path file-path" title="${esc(prettyPath(f.file_path))}">${esc(shortPath(f.file_path))}</td>
+        <td class="col-path">${filePathCell(f.file_path)}</td>
         <td class="col-action"><button class="remove-btn" onclick="event.stopPropagation();removeFile('${escJS(f.file_path)}')" title="仅清除索引与图谱，不删除磁盘原文件">移除</button></td>
       </tr>`;
     }).join('');
@@ -1445,6 +1524,24 @@ def _supported_exts():
     return sorted(str(e).lower() for e in exts)
 
 
+def _max_per_page():
+    """每页条数上限：取 config.max_results，非法值回退 50"""
+    try:
+        value = int(config.get("max_results", 50))
+    except (TypeError, ValueError):
+        value = 50
+    return max(1, min(value, 500))
+
+
+def _int_arg(name, default, low=1, high=100000):
+    """读取整数 query 参数：非法值回退默认值，并夹在 [low, high] 内"""
+    try:
+        value = int(request.args.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(low, min(high, value))
+
+
 @app.route("/")
 def index_page():
     resp = make_response(render_template_string(HTML_TEMPLATE, formats=_supported_exts()))
@@ -1456,10 +1553,10 @@ def index_page():
 
 @app.route("/api/search")
 def api_search():
-    keyword = request.args.get("q", "").strip()
-    source_type = request.args.get("source_type", "").strip() or None
-    page = int(request.args.get("page", 1))
-    per_page = int(request.args.get("per_page", 20))
+    keyword = request.args.get("q", "").strip()[:200]
+    source_type = request.args.get("source_type", "").strip()[:32] or None
+    page = _int_arg("page", 1, 1, 100000)
+    per_page = _int_arg("per_page", 20, 1, _max_per_page())
     if not keyword:
         return jsonify({"results": [], "total": 0})
     results, total = indexer.search(keyword, source_type=source_type,page=page, per_page=per_page)
@@ -1477,9 +1574,9 @@ def api_search():
 
 @app.route("/api/files")
 def api_files():
-    page = int(request.args.get("page", 1))
-    per_page = int(request.args.get("per_page", 20))
-    source_type = request.args.get("source_type", "").strip() or None
+    page = _int_arg("page", 1, 1, 100000)
+    per_page = _int_arg("per_page", 20, 1, _max_per_page())
+    source_type = request.args.get("source_type", "").strip()[:32] or None
     files, total = indexer.get_doc_list(page=page, per_page=per_page, source_type=source_type)
     return jsonify({"files": files, "total": total, "page": page, "per_page": per_page})
 
@@ -1812,13 +1909,6 @@ def api_kg_node(entity_id):
     return jsonify(detail)
 
 
-@app.route("/api/kg/neighbors/<int:entity_id>")
-def api_kg_neighbors(entity_id):
-    depth = max(1, min(request.args.get("depth", 1, type=int), 3))
-    limit = max(1, min(request.args.get("limit", 60, type=int), 300))
-    return jsonify(kg.neighbors(entity_id, depth=depth, limit=limit))
-
-
 @app.route("/api/kg/graph")
 def api_kg_graph():
     top = max(1, min(request.args.get("top", 200, type=int), 1000))
@@ -1890,14 +1980,6 @@ def api_kg_rebuild():
 @app.route("/api/stats")
 def api_stats():
     return jsonify(indexer.get_stats())
-
-
-@app.route("/api/download")
-def api_download():
-    file_path = request.args.get("path", "").strip()
-    if not file_path or not os.path.isfile(file_path):
-        return jsonify({"error": "文件不存在"}), 404
-    return send_file(file_path, as_attachment=False)
 
 
 # ==================== 后台自动同步（已禁用，索引由前端「索引文件」主动触发） ====================

@@ -38,7 +38,7 @@
 | **索引文件 / 目录** | 唯一入口：填本机**单个文件**或**目录**的路径，服务端直接扫描（不上传、不复制文件）；**索引的是文件在本机的真实路径**（可「📁 在系统中打开」），后续「🔄 同步」按已索引文档所在目录持续增量更新（无需在 `config.yaml` 手工配置扫描目录） |
 | **单文件索引** | 只索引这一个文件：同步时也不会把它所在目录的其它文件拉进来 |
 | **同步保护** | 库里没有任何本机文件/目录的文档，或路径不可达（如移动硬盘未接）时跳过同步，不会把索引误判为"已删除" |
-| **文件管理** | 列表查看 / 原文弹窗 / 单条或批量移除 / 打开所在目录 / 下载（**只清索引与图谱，永不删除磁盘原文件**） |
+| **文件管理** | 列表查看 / 原文弹窗 / 单条或批量移除 / 打开所在目录（**只清索引与图谱，永不删除磁盘原文件**） |
 | **清空文档** | `🧹 清空文档`：一次清掉全部索引与图谱，**二次确认**（第二次须输入「清空」二字），**不删除磁盘原文件** |
 
 ---
@@ -82,6 +82,7 @@ knowseek/
 │   ├── indexer.py           # SQLite FTS5 索引 + 搜索 + 统计
 │   ├── sync.py              # 增量同步（扫描目录 → MD5 对比 → 索引）
 │   ├── kg.py                # 知识图谱（结构树 / 实体抽取 / 别名合并 / 最短路径）
+│   ├── runtime.py           # 运行路径（源码 / exe 便携目录）
 │   └── server.py            # Flask 服务 + 全部前端界面（单文件模板）
 ├── data/
 │   ├── knowseek.db             # SQLite 数据库（唯一数据源，首次运行自动创建）
@@ -100,33 +101,39 @@ knowseek/
 │   └── knowseek.log         # 运行日志
 ├── config.yaml              # 配置文件
 ├── requirements.txt         # Python 依赖
-├── run.py                   # 启动入口
-├── 启动知寻.bat             # Windows 一键启动（自动选环境 + 自动装依赖）
-├── 停止知寻.bat             # Windows 停止服务
-├── 重启知寻.bat             # Windows 重启服务
-└── 修复环境.bat             # Windows 下载 zip 后的排错脚本（解锁 / 修换行 / 环境自检）
+├── knowseek.spec            # PyInstaller 打包配置
+├── build_exe.py             # Windows exe 构建脚本
+└── run.py                   # 启动入口
 ```
 
 ---
 
 ## 🚀 快速开始
 
-### 方式 A：Windows 双击即用（推荐，不用装 Python）
+### 方式 A：Windows 本机 Python
 
-仓库**自带完整的 `.venv` 运行环境**，所以下载解压后不需要 `pip install` 任何东西。
+> 需要 Python 3.9–3.12（Flask 3.x 已不支持更老的版本）。
 
-三步，请严格按顺序做：
+首次使用先安装依赖（只需一次）：
 
-1. 下载 zip 后，**先右键 zip → 属性 → 勾选「解除锁定」→ 确定**，再解压
-   （不解锁的话，Windows 会把里面的 `python.exe` 当外来程序拦截、杀软也可能直接隔离）
-2. 解压到**短路径**，推荐 `C:\knowseek\`
-   （`.venv\Lib\site-packages\...` 路径很深，长路径会被 Windows 260 字符限制截断而丢文件）
-3. 双击 `启动知寻.bat`，等浏览器自动打开 **http://127.0.0.1:9876**
+```powershell
+& "D:\Python\python_install\python.exe" -m pip install -r requirements.txt
+```
 
-> **双击没反应 / 一闪而过？** 先双击一次 `修复环境.bat`（自动解锁 + 修复换行符 + 打印环境报告），再重试。
-> 仍然不行，看文末的 [排错章节](#排错windows-一键脚本)。
+启动：
+
+```powershell
+& "D:\Python\python_install\python.exe" run.py
+```
+
+然后浏览器访问 **http://127.0.0.1:9876**。停止服务按 `Ctrl+C`。
+
+> 路径请替换为本机 Python 3.9–3.12 的实际位置；本机默认 `python` 若是 3.7（例如旧版 Anaconda），不要使用。
+> 也可以打包 exe 后直接运行 `KnowSeek.exe`，无需 Python。
 
 ### 方式 B：手动命令行（macOS / Linux / 想用自己的 Python）
+
+> 需要 Python 3.9–3.12（Flask 3.x 已不支持更老的版本）。
 
 #### 1. 安装依赖
 
@@ -141,7 +148,7 @@ pip install -r requirements.txt
 编辑 `config.yaml`：
 
 ```yaml
-# 支持的文件扩展名（.doc 走 Word COM，仅 Windows；.xls 与 .xlsx 同一解析器）
+# 支持的文件扩展名（.doc 走 Word COM，仅 Windows；.xlsx 用 openpyxl，.xls 用 xlrd）
 extensions:
   - ".docx"
   - ".doc"
@@ -151,8 +158,7 @@ extensions:
   - ".xlsx"
   - ".xls"
 
-sync_interval: 300   # 增量同步间隔（秒）
-max_results: 50      # 搜索结果默认返回条数
+max_results: 50      # 搜索 / 文件列表每页条数上限（前端默认每页 10 条）
 port: 9876           # 服务端口
 
 # 自定义词典（可选，一行一个词）
@@ -178,14 +184,32 @@ python run.py
 
 ---
 
-## 🪟 Windows 脚本说明
+## 🪟 Windows 启动说明
 
-| 脚本 | 用途 |
+项目不再提供 `.bat` 脚本，统一使用命令或 exe：
+
+| 场景 | 命令 |
 |------|------|
-| `启动知寻.bat` | 自动挑环境 → 依赖自检 → 后台启动 + 开浏览器；已在运行则只打开页面 |
-| `停止知寻.bat` | 终止占用 9876 端口的进程；未运行时直接提示 |
-| `重启知寻.bat` | 先停止 → 等端口释放 → 再启动（改完代码/配置后用这个） |
-| `修复环境.bat` | **下载 zip 后双击无效的万能第一步**：解除文件锁定、修复 bat 换行符、打印环境报告 |
+| 使用本机 Python 3.9–3.12 | `python run.py` |
+| 使用指定 Python 3.10 | `& "D:\Python\python_install\python.exe" run.py` |
+| 使用 exe（打包后） | `KnowSeek.exe` |
+| 停止服务 | 在运行窗口按 `Ctrl+C`；后台进程可执行 `taskkill /F /PID <PID>` |
+
+> 端口占用时，可修改 `config.yaml` 的 `port`，或用 `netstat -ano | findstr :9876` 找到 PID 后结束进程。
+
+### 打包 Windows exe
+
+```powershell
+& "D:\Python\python_install\python.exe" build_exe.py
+```
+
+产物在 `dist\KnowSeek\KnowSeek.exe`，采用 **onedir** 模式：
+
+- `KnowSeek.exe` 和 `_internal\` 必须放在同一目录，不能只拷 exe
+- `config.yaml`、`data\`、`logs\` 位于 exe 同目录，便于备份和迁移
+- 首次启动会从 `_internal` 复制默认配置与词典；当前索引库在首次构建时复制，后续重建保留 `dist` 中的数据
+- 直接双击 `KnowSeek.exe` 会自动打开浏览器；命令行加 `--no-browser` 可关闭
+- 目标机器不需要安装 Python；`.doc` 解析仍需要本机安装 Microsoft Word
 
 
 ## 🖥️ 界面功能
@@ -215,7 +239,7 @@ Tab 顺序：**📊 仪表盘 › 🔍 搜索 › 🕸 知识图谱 › 📁 文
 - 全选/取消全选、单行勾选高亮、批量移除（都只清索引与图谱，磁盘原文件保留）
 - `🧹 清空文档`：第一次弹窗告知范围 → 第二次弹窗须输入「清空」二字
 - 点击文件名 → 原文弹窗；分页（每页 10 条）
-- 路径列显示文件在本机的真实路径
+- 路径列显示文件在本机的真实路径；过长时中间省略为「开头...结尾」，鼠标悬浮跑马灯展示完整路径，📋 按钮可复制完整路径
 
 ### 📄 索引文件
 - 填写本机**单个文件**或**目录**的绝对路径（回车即可索引）→ 「🚀 开始索引」
@@ -259,7 +283,8 @@ Tab 顺序：**📊 仪表盘 › 🔍 搜索 › 🕸 知识图谱 › 📁 文
 | `.doc` | pywin32 调 Word COM 转换（仅 Windows） | 同 `.docx` | 同 `.docx` |
 | `.pdf` | pdfplumber 按页 | 每页 = 1 chunk | 文件路径 + "第 N 页" + 页号 |
 | `.xlsx` | openpyxl 按 Sheet | 每行 = 1 chunk | 文件路径 + Sheet 名 + 行号 |
-| `.txt` / `.md` | 逐行读取 | 每 3 行 = 1 chunk | 文件路径 + 行号范围 |
+| `.xls` | xlrd 按 Sheet（Excel 97-2003） | 每行 = 1 chunk | 文件路径 + Sheet 名 + 行号 |
+| `.txt` / `.md` | 逐行读取，按空行分段；Markdown 按标题分段 | 连续非空行为 1 chunk | 文件路径 + 行号 + 最近标题 |
 
 ### 搜索流程
 
@@ -281,7 +306,7 @@ Tab 顺序：**📊 仪表盘 › 🔍 搜索 › 🕸 知识图谱 › 📁 文
 
 ## 💾 数据存储说明
 
-- **`data/knowseek.db` 是唯一数据源**（索引 + 图谱都在里面）。备份/迁移只需拷贝这一个文件。
+- **`data/knowseek.db` 是唯一数据源**（索引 + 图谱都在里面）。备份/迁移拷贝这一个文件即可；**建议先停止服务再拷贝**。启用 WAL 后运行期间可能同时存在 `knowseek.db-wal` / `knowseek.db-shm`，服务停止时会自动合并，若仍在运行中备份请把这三个文件一起拷贝。
 - **只索引本机文件 / 目录**：不上传、不复制文件，库里记的是文件在本机的真实路径，列表里可「📁 在系统中打开」；原文件始终在磁盘，改动后点同步按 MD5 重新解析。
 - 全量同步（`prune`）会清理"扫描不到的文档"；早期版本上传产生的 `upload://` 记录（若有）会被跳过，不会误删。
 - **知寻不会删除磁盘上的任何原文件**：单条移除 / 批量移除 / `🧹 清空文档` 清的都是数据库（`documents` / `chunks_fts` / `kg_*`），原文件始终留在磁盘上；要真正删文件请用系统文件管理器（列表里有「📁 在系统中打开」）。
@@ -294,32 +319,6 @@ Tab 顺序：**📊 仪表盘 › 🔍 搜索 › 🕸 知识图谱 › 📁 文
 
 ---
 
-## 🔌 主要 API
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/search` | 搜索（含 `entities` 命中实体） |
-| GET | `/api/stats` | 文档数 / 片段数 / 来源分布 |
-| GET | `/api/file_content` | 取原文（查库，不重新解析） |
-| GET/DELETE | `/api/files` | 文件列表 / 移除索引 |
-| DELETE | `/api/files/batch` | 批量移除 |
-| POST | `/api/files/clear` | 清空全部索引 + 图谱（需 `confirm:"CLEAR"`，不删原文件） |
-| POST | `/api/sync` | 全量同步（prune） |
-| POST | `/api/scan_preview` | 目录预检（只统计不入库） |
-| POST | `/api/index_path` | 增量索引某个文件或目录（prune=false） |
-| POST | `/api/open_file` | 打开/定位到本地文件 |
-| GET | `/api/kg/stats` | 图谱统计 |
-| GET | `/api/kg/entities` | 实体列表（分页） |
-| GET | `/api/kg/graph` | 图数据（top / type / q） |
-| GET | `/api/kg/node/<id>` | 实体详情（提及、共现、别名） |
-| GET | `/api/kg/neighbors/<id>` | 邻居 |
-| GET | `/api/kg/path` | 两实体最短路径 |
-| POST | `/api/kg/merge` | 合并实体 |
-| POST | `/api/kg/apply_alias` | 按别名表批量合并 |
-| POST | `/api/kg/rebuild` | 重建图谱（不重新解析文件） |
-
----
-
 ## 📦 依赖清单
 
 | 依赖 | 用途 |
@@ -327,10 +326,13 @@ Tab 顺序：**📊 仪表盘 › 🔍 搜索 › 🕸 知识图谱 › 📁 文
 | jieba | 中文分词 + 词性标注 |
 | python-docx | Word `.docx` 解析 |
 | pdfplumber | PDF 解析 |
-| openpyxl | Excel 解析 |
+| openpyxl | Excel `.xlsx` 解析 |
+| xlrd | Excel 97-2003 `.xls` 解析 |
 | flask | Web 服务 |
 | PyYAML | 配置文件解析 |
 | pywin32 | `.doc` 解析（仅 Windows） |
+
+> `pdfplumber` 会附带 `Pillow` / `pypdfium2`，它们只用于把 PDF 页面渲染成图片；知寻只提取文本，打包 exe 时会排除这两个依赖。若只提取文本，可在本机环境移除它们，`pip check` 的对应提示可忽略；重新执行 `pip install -r requirements.txt` 会恢复。
 
 ---
 
