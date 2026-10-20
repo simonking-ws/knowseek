@@ -120,13 +120,25 @@ knowseek/
 & python -m pip install -r requirements.txt
 ```
 
-启动：
+启动（默认后台运行）：
 
 ```powershell
 & python run.py
 ```
 
-然后浏览器访问 **http://127.0.0.1:9876**。停止服务按 `Ctrl+C`。
+启动器会先结束占用端口的旧实例，再启动服务；浏览器会自动打开 **http://127.0.0.1:9876**，启动器进程约 5 秒后退出，服务继续在后台运行。
+
+停止后台服务：
+
+```powershell
+& python run.py --stop
+```
+
+需要查看日志或使用 `Ctrl+C` 时，改为前台运行：
+
+```powershell
+& python run.py --foreground
+```
 
 > 路径请替换为本机 Python 3.9–3.12 的实际位置；本机默认 `python` 若是 3.7（例如旧版 Anaconda），不要使用。
 > 也可以打包 exe 后直接运行 `KnowSeek.exe`，无需 Python。
@@ -180,7 +192,7 @@ kg:
 python run.py
 ```
 
-浏览器访问 **http://127.0.0.1:9876**
+浏览器访问 **http://127.0.0.1:9876**。macOS / Linux 默认前台运行，按 `Ctrl+C` 停止；Windows 默认后台运行，启动器约 5 秒后退出，可用 `python run.py --stop` 停止。
 
 ---
 
@@ -190,11 +202,12 @@ python run.py
 
 | 场景 | 命令 |
 |------|------|
-| 使用本机 Python 3.9–3.12 | `python run.py` |
-| 使用 exe（打包后） | `KnowSeek.exe` |
-| 停止服务 | 在运行窗口按 `Ctrl+C`；后台进程可执行 `taskkill /F /PID <PID>` |
+| 默认后台启动（5 秒后关闭窗口） | `python run.py` / `KnowSeek.exe` |
+| 前台运行（保留窗口，`Ctrl+C` 停止） | `python run.py --foreground` / `KnowSeek.exe --foreground` |
+| 停止后台服务 | `python run.py --stop` / `KnowSeek.exe --stop` |
+| 不自动打开浏览器 | 追加 `--no-browser` |
 
-> 端口占用时，可修改 `config.yaml` 的 `port`，或用 `netstat -ano | findstr :9876` 找到 PID 后结束进程。
+> 启动前会自动结束占用当前端口的旧实例，无需手动处理端口。
 
 ### 打包 Windows exe
 
@@ -207,7 +220,8 @@ python run.py
 - `KnowSeek.exe` 和 `_internal\` 必须放在同一目录，不能只拷 exe
 - `config.yaml`、`data\`、`logs\` 位于 exe 同目录，便于备份和迁移
 - 首次启动会从 `_internal` 复制默认配置与词典；当前索引库在首次构建时复制，后续重建保留 `dist` 中的数据
-- 直接双击 `KnowSeek.exe` 会自动打开浏览器；命令行加 `--no-browser` 可关闭
+- 直接双击 `KnowSeek.exe` 会先清理旧端口，再后台启动并自动打开浏览器；启动器窗口 5 秒后自动关闭，服务继续运行
+- 停止后台服务用 `KnowSeek.exe --stop`；调试时用 `--foreground` 保留控制台，`--no-browser` 可关闭浏览器
 - 目标机器不需要安装 Python；`.doc` 解析仍需要本机安装 Microsoft Word
 
 
