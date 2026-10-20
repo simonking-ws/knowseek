@@ -117,13 +117,13 @@ knowseek/
 首次使用先安装依赖（只需一次）：
 
 ```powershell
-& "D:\Python\python_install\python.exe" -m pip install -r requirements.txt
+& python -m pip install -r requirements.txt
 ```
 
 启动：
 
 ```powershell
-& "D:\Python\python_install\python.exe" run.py
+& python run.py
 ```
 
 然后浏览器访问 **http://127.0.0.1:9876**。停止服务按 `Ctrl+C`。
@@ -191,7 +191,6 @@ python run.py
 | 场景 | 命令 |
 |------|------|
 | 使用本机 Python 3.9–3.12 | `python run.py` |
-| 使用指定 Python 3.10 | `& "D:\Python\python_install\python.exe" run.py` |
 | 使用 exe（打包后） | `KnowSeek.exe` |
 | 停止服务 | 在运行窗口按 `Ctrl+C`；后台进程可执行 `taskkill /F /PID <PID>` |
 
@@ -200,7 +199,7 @@ python run.py
 ### 打包 Windows exe
 
 ```powershell
-& "D:\Python\python_install\python.exe" build_exe.py
+& python build_exe.py
 ```
 
 产物在 `dist\KnowSeek\KnowSeek.exe`，采用 **onedir** 模式：
